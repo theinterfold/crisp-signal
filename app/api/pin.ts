@@ -1,6 +1,7 @@
 // Vercel function: pins a poll's metadata on Pinata, so the Pinata key never reaches the browser.
 // It pins only documents that parse as CRISP Signal polls within the form's limits.
-import { parseMetadata } from '../src/lib/metadata'
+// Vercel runs this as plain Node ESM, which needs the file extension; TypeScript and Vite map it to .ts.
+import { parseMetadata } from '../src/lib/metadata.js'
 
 const MAX_BODY_BYTES = 16 * 1024
 

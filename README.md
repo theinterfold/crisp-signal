@@ -124,11 +124,12 @@ the Minimum committee); the create page links the testnet faucet.
 
 ## Current Sepolia deployments
 
-A board's ZKPassport domain is fixed, so each host has its own board.
+A board's ZKPassport domain is fixed, so each host has its own board. Vercel production
+(`poll.theinterfold.com`) builds with `VITE_BOARD_ADDRESS` set to the first row.
 
 | App | `CrispSignal` | ZKPassport domain |
 |---|---|---|
-| https://crisp-signal.vercel.app | [`0x8d17E52D6194655743216a2CE010321f99234D6e`](https://sepolia.etherscan.io/address/0x8d17E52D6194655743216a2CE010321f99234D6e) | `crisp-signal.vercel.app` |
+| https://poll.theinterfold.com | [`0xA9802BE13C6810b90fc11726ec8fC85BE128AA80`](https://sepolia.etherscan.io/address/0xA9802BE13C6810b90fc11726ec8fC85BE128AA80) | `poll.theinterfold.com` |
 | http://localhost:5180 | [`0x9bfb40e434E2af0A203969b5dd02764FCe9f9153`](https://sepolia.etherscan.io/address/0x9bfb40e434E2af0A203969b5dd02764FCe9f9153) | `localhost` |
 
 Each board's poll #0 is a demo: mock IDs accepted, age 18+, any nationality.
