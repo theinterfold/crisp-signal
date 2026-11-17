@@ -12,14 +12,26 @@
   },
   "packageManager": "pnpm@12.21.0+sha512.66fd8278ee28935ce951792d34367ff3af5c432a2756445823029533835b8da529bbe0be5130afd56ed0713fb8789e47bad82d93bd5ae2fe54b15562d6276ef0",
   "dependencies": {
-    "@crisp-e3/sdk": "^0.28.1",
+    "@aztec-foundation/bb.js": "6.0.0",
+    "@aztec-labs/accounts": "6.0.0",
+    "@aztec-labs/aztec.js": "6.0.0",
+    "@aztec-labs/constants": "6.0.0",
+    "@aztec-labs/foundation": "6.0.0",
+    "@aztec-labs/noir-contracts.js": "6.0.0",
+    "@aztec-labs/stdlib": "6.0.0",
+    "@aztec-labs/wallets": "6.0.0",
+    "@crisp-e3/aztec": "file:vendor/crisp-e3-aztec-0.28.1.tgz",
+    "@crisp-e3/sdk": "file:vendor/crisp-e3-sdk-0.28.1.tgz",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/source-serif-4": "^5.3.1",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@phosphor-icons/react": "^2.1.10",
     "@tanstack/react-query": "^5.107.1",
     "@types/node": "^22.20.5",
-    "@zkpassport/sdk": "^0.20.1",
+    "@zk-kit/lean-imt": "^2.2.4",
+    "@zkpassport/aztec": "0.1.0-beta.0",
+    "@zkpassport/sdk": "0.21.0",
+    "@zkpassport/utils": "0.40.0",
     "connectkit": "^1.9.2",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
@@ -36,5 +48,8 @@
     "typescript": "^5.8.3",
     "vite": "^5.4.21",
     "vite-plugin-node-polyfills": "^0.22.0"
+  },
+  "overrides": {
+    "@crisp-e3/sdk": "$@crisp-e3/sdk"
   }
 }

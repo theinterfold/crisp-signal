@@ -1,101 +1,123 @@
-import { isHex, type Address, type Hex } from 'viem'
-import type { SolidityVerifierParameters } from '@zkpassport/sdk'
-import { ZKPASSPORT_CHAIN } from '../config'
-import { NationalityRule, type Policy } from './polls'
+import type { CompressedProofResult } from '@crisp-e3/aztec'
+import type { ProofResult } from '@zkpassport/sdk'
+import { isHex } from 'viem'
 
-/** `PassportRegistry.PROOF_VALIDITY`: the registry rejects older proofs. */
-const PROOF_VALIDITY_SECONDS = 7 * 24 * 60 * 60
-
-/** `IZKPassportVerifier.ProofVerificationParams`, as `PassportRegistry.register` takes it. */
-export type RegisterParams = {
-  version: Hex
-  proofVerificationData: { vkeyHash: Hex; proof: Hex; publicInputs: Hex[] }
-  committedInputs: Hex
-  serviceConfig: { validityPeriodInSeconds: bigint; domain: string; scope: string; devMode: boolean }
-}
-
-function hex(name: string, value: string): Hex {
-  if (!isHex(value)) throw new Error(`ZKPassport returned a malformed ${name}.`)
-  return value
-}
-
-function toRegisterParams(p: SolidityVerifierParameters): RegisterParams {
-  return {
-    version: hex('version', p.version),
-    proofVerificationData: {
-      vkeyHash: hex('vkey hash', p.proofVerificationData.vkeyHash),
-      proof: hex('proof', p.proofVerificationData.proof),
-      publicInputs: p.proofVerificationData.publicInputs.map((v) => hex('public input', v)),
-    },
-    committedInputs: hex('committed inputs', p.committedInputs),
-    // The registry overwrites the service config with its own; these values only fill the struct.
-    serviceConfig: { ...p.serviceConfig, validityPeriodInSeconds: BigInt(p.serviceConfig.validityPeriodInSeconds) },
-  }
+/** The ZKPassport circuits release the Aztec contract verifies, from its packed `zkpassport_version` (three 16-bit numbers from bit 240). */
+export function unpackCircuitsVersion(packed: bigint): string {
+  const part = (shift: bigint) => (packed >> shift) & 0xffffn
+  return `${part(240n)}.${part(224n)}.${part(208n)}`
 }
 
 export type PassportRequestEvents = {
   onScanned: () => void
   onProving: () => void
-  /** The proof as the registry's `register` takes it; `false` shows ZKPassport's error state. */
-  onProof: (params: RegisterParams) => Promise<boolean | void>
+  /** The `compressed` outer proof, checked to be of the shape the poll needs; `false` shows ZKPassport's error state. */
+  onProof: (proof: ProofSummary) => boolean
   onRejected: () => void
   onError: (message: string) => void
 }
 
+/** What the ZKPassport app returned, in the form registration consumes, with what is logged and reported when it does not fit. */
+export type ProofSummary = {
+  result: CompressedProofResult
+  name: string | undefined
+  version: string | undefined
+}
+
 export type PassportRequest = { url: string; qr: string; cancel: () => void }
 
+/** `outer_count_5` → 5: the number of subproofs the outer circuit aggregates. */
+const subproofsOf = (name: string | undefined) => {
+  const match = name?.match(/(\d+)$/)
+  return match ? Number(match[1]) : undefined
+}
+
 /**
- * Opens a ZKPassport request for exactly what a poll's registry checks on-chain: the same domain,
- * scope and dev mode, the same age floor and country list, FaceMatch when required, and the voter's
- * address and chain bound into the proof.
+ * Picks the outer proof of a `compressed` result and checks it fits the poll. A proof the contract cannot verify is only found out
+ * after minutes of proving on Aztec, so everything knowable from the result is checked here and reported with the proof's own
+ * `name` and `version`.
+ */
+export function selectOuterProof(proofs: ProofResult[], expected: { subproofs: 4 | 5; circuitsVersion: string }): ProofSummary {
+  const seen = proofs.map((p) => `${p.name ?? '?'}@${p.version ?? '?'}`).join(', ') || 'none'
+  console.info('ZKPassport returned proofs', proofs.map((p) => ({ name: p.name, version: p.version, index: p.index, total: p.total })))
+
+  const outer = proofs.find((p) => p.name?.startsWith('outer'))
+  if (!outer?.proof || !outer.vkeyHash) {
+    throw new Error(`ZKPassport returned no compressed outer proof (proofs received: ${seen}). Update the ZKPassport app and try again.`)
+  }
+  const summary = { result: { proof: outer.proof, vkeyHash: outer.vkeyHash }, name: outer.name, version: outer.version }
+
+  const subproofs = subproofsOf(outer.name)
+  if (subproofs !== undefined && subproofs !== expected.subproofs) {
+    throw new Error(
+      `ZKPassport returned the proof ${outer.name} (circuits ${outer.version ?? 'unknown'}), which aggregates ${subproofs} subproofs; ` +
+        `this poll verifies ${expected.subproofs}-subproof proofs of circuits ${expected.circuitsVersion}.`,
+    )
+  }
+  if (outer.version && outer.version !== expected.circuitsVersion) {
+    throw new Error(
+      `ZKPassport returned the proof ${outer.name} of circuits ${outer.version}, but this poll verifies circuits ${expected.circuitsVersion}. ` +
+        'The ZKPassport app and the poll are on different circuit releases.',
+    )
+  }
+  return summary
+}
+
+/**
+ * Opens a ZKPassport `compressed` request for exactly what the Aztec contract checks: its domain, the round's scope (the L1
+ * program's `scopeOf(e3Id)`), the age floor, a document-bound identifier, mock documents only if the round allows them, and the
+ * voter's Aztec account bound into the proof (the account that sends `register`).
  */
 export async function requestPassportProof(
-  { domain, scope, policy, account, purpose }: { domain: string; scope: string; policy: Policy; account: Address; purpose: string },
+  {
+    domain,
+    scope,
+    minAge,
+    devMode,
+    validitySeconds,
+    aztecAddress,
+    purpose,
+    expected,
+  }: {
+    domain: string
+    scope: string
+    minAge: number
+    devMode: boolean
+    validitySeconds: number
+    aztecAddress: string
+    purpose: string
+    expected: { circuitsVersion: string }
+  },
   events: PassportRequestEvents,
 ): Promise<PassportRequest> {
   // The SDK and its prover dependencies are large; only voters who verify download them.
-  const [{ ZKPassport }, qrcode] = await Promise.all([import('@zkpassport/sdk'), import('qrcode')])
+  const [{ ZKPassport, NullifierType }, qrcode] = await Promise.all([import('@zkpassport/sdk'), import('qrcode')])
   const zkPassport = new ZKPassport(domain)
   let query = await zkPassport.request({
     name: 'CRISP Signal',
     purpose,
     scope,
-    mode: 'compressed-evm',
-    devMode: policy.devMode,
-    validity: PROOF_VALIDITY_SECONDS,
+    mode: 'compressed',
+    devMode,
+    validity: validitySeconds,
+    uniqueIdentifierType: NullifierType.NON_SALTED,
   })
 
-  if (policy.minAge > 0) query = query.gte('age', policy.minAge)
-  // The registry compares the committed list entry by entry, so pass exactly its stored order.
-  if (policy.nationalityRule === NationalityRule.Allow) query = query.in('nationality', policy.countries as never)
-  if (policy.nationalityRule === NationalityRule.Deny) query = query.out('nationality', policy.countries as never)
-  if (policy.faceMatch) query = query.facematch('strict')
-  const request = query.bind('user_address', account).bind('chain', ZKPASSPORT_CHAIN).done()
+  if (minAge > 0) query = query.gte('age', minAge)
+  if (!isHex(aztecAddress)) throw new Error('The Aztec address is not hex.')
+  const request = query.bind('user_address', aztecAddress).done()
 
   request.onRequestReceived(events.onScanned)
   request.onGeneratingProof(events.onProving)
   request.onReject(events.onRejected)
   request.onError((error: unknown) => events.onError(typeof error === 'string' ? error : String(error)))
-  request.onSuccess(async ({ proofs }) => {
-    const proof = proofs.find((p) => p.name?.startsWith('outer_evm'))
-    if (!proof) {
-      events.onError('ZKPassport returned no on-chain (outer_evm) proof.')
-      return false
-    }
-    const params = zkPassport.getSolidityVerifierParameters({
-      proof,
-      scope,
-      devMode: policy.devMode,
-      validityPeriodInSeconds: PROOF_VALIDITY_SECONDS,
-    })
-    let args: RegisterParams
+  request.onSuccess(({ proofs }) => {
     try {
-      args = toRegisterParams(params)
+      return events.onProof(selectOuterProof(proofs, { subproofs: minAge > 0 ? 5 : 4, circuitsVersion: expected.circuitsVersion }))
     } catch (error) {
       events.onError(error instanceof Error ? error.message : String(error))
       return false
     }
-    return events.onProof(args)
   })
 
   const qr = await qrcode.toDataURL(request.url, { margin: 1, width: 280, color: { dark: '#121718', light: '#ffffff' } })

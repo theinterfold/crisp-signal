@@ -587,6 +587,10 @@ main {
   color: var(--muted);
 }
 
+.hint.error {
+  color: var(--negative);
+}
+
 .input,
 .textarea,
 .select {
@@ -618,6 +622,38 @@ main {
 .input-group {
   display: flex;
   gap: 8px;
+}
+
+.duration {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.duration-part {
+  position: relative;
+}
+
+.duration-part .input {
+  padding-right: 52px;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+
+.duration-part .input::-webkit-inner-spin-button,
+.duration-part .input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.duration-unit {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
+  color: var(--muted);
+  pointer-events: none;
 }
 
 .grid-2 {

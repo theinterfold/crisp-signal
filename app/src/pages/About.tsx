@@ -3,15 +3,15 @@ import { Link } from 'react-router-dom'
 const STEPS = [
   {
     title: 'An organiser opens a poll',
-    body: 'The question and options go to IPFS. The poll board deploys a census registry holding the eligibility rules and asks the Interfold for a CRISP round. A committee of ciphernodes generates a shared key; no single node can decrypt alone.',
+    body: 'The question and options go to IPFS. The poll board, one transaction on Ethereum, asks the Interfold for a CRISP round that runs on Aztec. A committee of ciphernodes generates a shared key; no single node can decrypt alone.',
   },
   {
     title: 'Voters prove eligibility with ZKPassport',
-    body: "The ZKPassport app reads the passport or ID card chip and proves on the phone that its holder meets the rules: minimum age, nationality, optionally a face match. The poll's registry verifies the proof on-chain. It learns a per-poll identifier for the document, so the same document cannot register twice, and nothing else about the person.",
+    body: "The ZKPassport app reads the passport or ID card chip and proves on the phone that its holder meets the rule: a minimum age, if the poll sets one. The poll's contract on Aztec verifies the proof, which your browser proves into a transaction paid by Aztec's sponsored fee contract: no Ethereum wallet and no gas. It learns a per-poll identifier for the document, so the same document cannot register twice, and nothing else about the person.",
   },
   {
     title: 'Ballots are encrypted and proven in the browser',
-    body: 'The vote is encrypted to the committee key with fully homomorphic encryption, and a zero-knowledge proof shows it is a valid ballot for a registered address. The CRISP relay stages it and records a commitment on-chain. Voters can recast; the latest ballot counts.',
+    body: 'The vote is encrypted to the committee key with fully homomorphic encryption, and a zero-knowledge proof shows it is a valid ballot for a registered address. The CRISP server stores the ciphertext and attests it, and the ballot is cast on Aztec. Voters can recast; the latest ballot counts.',
   },
   {
     title: 'Masks make receipts worthless',
@@ -19,14 +19,15 @@ const STEPS = [
   },
   {
     title: 'Only the tally is decrypted',
-    body: 'When voting closes, the encrypted ballots are summed while still encrypted. The committee decrypts only that sum and publishes it, with proofs, on-chain. Individual choices are never decrypted.',
+    body: 'When voting closes, the round is sealed on Aztec and, once Aztec has proven the epoch (usually 1–2 hours), its input root reaches Ethereum. The encrypted ballots are then summed while still encrypted, and the committee decrypts only that sum and publishes it, with proofs, on Ethereum. Individual choices are never decrypted.',
   },
 ]
 
 const LIMITS = [
-  'Eligibility is per document: someone with two qualifying documents (for example a passport and an ID card) can register two wallets.',
-  'Verification trusts ZKPassport\'s on-chain verifier and its certificate registry, which ZKPassport administers.',
-  'This demo runs on the Sepolia CRISP deployment, which uses mock compute verification and a mock data-availability layer.',
+  'Eligibility is per document: someone with two qualifying documents (for example a passport and an ID card) can register twice.',
+  'Verification trusts ZKPassport\'s circuits and its certificate registry on Aztec, which ZKPassport administers.',
+  'This demo runs on Ethereum Sepolia and the Aztec testnet, with mock compute verification and a mock data-availability layer.',
+  'Your Aztec account and per-poll slot keys live in this browser: clearing its storage loses them, so download the backup the poll page offers.',
   'Polls that accept mock IDs are open to anyone: use them for rehearsals only.',
 ]
 

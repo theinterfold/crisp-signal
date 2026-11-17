@@ -5,22 +5,22 @@ import { useAccount, useReadContracts, useWriteContract } from 'wagmi'
 import { formatUnits, parseEventLogs, stringToHex, zeroAddress, type Address } from 'viem'
 import { Plus, Trash } from '@phosphor-icons/react'
 import { BOARD_ADDRESS, CHAIN, COMPUTE_PROVIDER_PARAMS, CRYPTO_CONFIG_ID, FAUCET_ADDRESS, INTERFOLD_ADDRESS, PARAM_SET } from '../config'
-import { CountryPicker, MAX_COUNTRIES } from '../components/CountryPicker'
 import { Notice } from '../components/PollBits'
-import { crispSignalAbi, erc20Abi, faucetAbi, interfoldAbi } from '../lib/abi'
+import { ciphernodeRegistryAbi, crispAztecProgramAbi, crispSignalAztecAbi, erc20Abi, faucetAbi, interfoldAbi } from '../lib/abi'
 import { errorMessage, formatDuration, OPTION_COLORS } from '../lib/format'
+import { DurationInput } from '../components/DurationInput'
 import { uploadMetadata } from '../lib/ipfs'
 import { MAX_OPTIONS, type PollMetadata } from '../lib/metadata'
-import { NationalityRule } from '../lib/polls'
 import { publicClient } from '../lib/wagmi'
 
-const START_DELAYS = [
-  { label: 'In 15 minutes', seconds: 15 * 60 },
-  { label: 'In 1 hour', seconds: 3600 },
-  { label: 'In 6 hours', seconds: 6 * 3600 },
-  { label: 'Tomorrow', seconds: 86400 },
-]
-const DURATIONS = [3600, 6 * 3600, 86400, 3 * 86400, 7 * 86400]
+const MINUTE = 60
+const DAY = 86400
+/** Voting shorter than this leaves no time to prove and submit a ballot. */
+const MIN_DURATION = 5 * MINUTE
+/** What follows the close of voting before results: Aztec's epoch proof, the root's trip to Ethereum, the compute, the decryption. */
+const RESULT_DELAY = '1–2 hours'
+/** Time between filling in the form and the transaction landing, kept free under the network's cap. */
+const SUBMIT_SLACK = 10 * MINUTE
 const COMMITTEES = [
   { value: 0, label: 'Minimum', hint: 'Smallest committee, lowest fee.' },
   { value: 1, label: 'Micro', hint: 'More ciphernodes must collude to decrypt early.' },
@@ -42,15 +42,57 @@ function inputWindow(startDelay: number, duration: number): [bigint, bigint] {
   return [BigInt(start), BigInt(start + duration)]
 }
 
-/** What the board requests from: the E3 program it names and the token Interfold charges in. */
-type Setup = { program: Address; feeToken: Address }
+const when = (offsetSeconds: number) =>
+  new Date(Date.now() + offsetSeconds * 1000).toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+/**
+ * What the board requests from: the E3 program it names and the token Interfold charges in, plus
+ * the network's timing rules.
+ * - `keyReservation`: the worst case from request to published committee key.
+ * - `maxSpan`: the latest the window may close, counted from the request. Interfold rejects a round
+ *   whose close plus the compute and decryption windows exceeds `maxDuration`.
+ */
+type Setup = {
+  program: Address
+  feeToken: Address
+  keyReservation: number
+  maxSpan: number
+  /** The program's shortest voting window (zero turns the key-deadline and length checks off). */
+  minVotingDuration: number
+  /** Interfold's compute window must cover this: the time Aztec needs to deliver the input root. */
+  remoteFinalityWindow: number
+  computeWindow: number
+}
 
 async function loadSetup(): Promise<Setup> {
-  const [program, feeToken] = await Promise.all([
-    publicClient.readContract({ address: BOARD_ADDRESS, abi: crispSignalAbi, functionName: 'CRISP_PROGRAM' }),
+  const [program, feeToken, timeouts, maxDuration, registry] = await Promise.all([
+    publicClient.readContract({ address: BOARD_ADDRESS, abi: crispSignalAztecAbi, functionName: 'CRISP_PROGRAM' }),
     publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'feeToken' }),
+    publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'getTimeoutConfig' }),
+    publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'maxDuration' }),
+    publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'ciphernodeRegistry' }),
   ])
-  return { program, feeToken }
+  const [randomness, sortition, minVotingDuration, remoteFinalityWindow] = await Promise.all([
+    publicClient.readContract({ address: registry, abi: ciphernodeRegistryAbi, functionName: 'randomnessRequestTimeout' }),
+    publicClient.readContract({ address: registry, abi: ciphernodeRegistryAbi, functionName: 'sortitionSubmissionWindow' }),
+    publicClient.readContract({ address: program, abi: crispAztecProgramAbi, functionName: 'minVotingDuration' }),
+    publicClient.readContract({ address: program, abi: crispAztecProgramAbi, functionName: 'remoteFinalityWindow' }),
+  ])
+  return {
+    program,
+    feeToken,
+    keyReservation: Number(randomness + sortition + timeouts.dkgWindow),
+    maxSpan: Number(maxDuration - timeouts.computeWindow - timeouts.decryptionWindow),
+    minVotingDuration: Number(minVotingDuration),
+    remoteFinalityWindow: Number(remoteFinalityWindow),
+    computeWindow: Number(timeouts.computeWindow),
+  }
 }
 
 async function quote({ program, feeToken }: Setup, committeeSize: number, window: [bigint, bigint]) {
@@ -84,15 +126,12 @@ export function CreatePollPage() {
   const [organisation, setOrganisation] = useState('')
   const [description, setDescription] = useState('')
   const [options, setOptions] = useState(['Yes', 'No'])
-  const [startDelay, setStartDelay] = useState(START_DELAYS[0].seconds)
-  const [duration, setDuration] = useState(DURATIONS[2])
+  const [startDelay, setStartDelay] = useState(60 * MINUTE)
+  const [duration, setDuration] = useState(DAY)
   const [committeeSize, setCommitteeSize] = useState(0)
 
   const [minAge, setMinAge] = useState(18)
-  const [rule, setRule] = useState(NationalityRule.Any)
-  const [countries, setCountries] = useState<string[]>([])
-  const [faceMatch, setFaceMatch] = useState(false)
-  const [devMode, setDevMode] = useState(true)
+  const [allowMockDocuments, setAllowMockDocuments] = useState(true)
 
   const [step, setStep] = useState<Step>('idle')
   const [error, setError] = useState<string>()
@@ -101,11 +140,12 @@ export function CreatePollPage() {
   const setupRead = useQuery({ queryKey: ['setup'], queryFn: loadSetup, staleTime: Infinity })
   const setup = setupRead.data
   const feeToken = setup?.feeToken
+  // wagmi also lists mainnet (for ConnectKit's ENS lookups), so reads name the chain explicitly.
   const token = useReadContracts({
     contracts: [
-      { address: feeToken ?? zeroAddress, abi: erc20Abi, functionName: 'symbol' },
-      { address: feeToken ?? zeroAddress, abi: erc20Abi, functionName: 'decimals' },
-      { address: feeToken ?? zeroAddress, abi: erc20Abi, functionName: 'balanceOf', args: [address ?? zeroAddress] },
+      { chainId: CHAIN.id, address: feeToken ?? zeroAddress, abi: erc20Abi, functionName: 'symbol' },
+      { chainId: CHAIN.id, address: feeToken ?? zeroAddress, abi: erc20Abi, functionName: 'decimals' },
+      { chainId: CHAIN.id, address: feeToken ?? zeroAddress, abi: erc20Abi, functionName: 'balanceOf', args: [address ?? zeroAddress] },
     ],
     allowFailure: false,
     query: { enabled: Boolean(feeToken) },
@@ -126,9 +166,22 @@ export function CreatePollPage() {
   if (!title.trim()) problems.push('Give the poll a title.')
   if (trimmedOptions.some((o) => !o)) problems.push('Every option needs a label.')
   if (new Set(trimmedOptions).size !== trimmedOptions.length) problems.push('Options must be distinct.')
-  if (rule !== NationalityRule.Any && countries.length === 0) problems.push('Pick at least one country, or allow any nationality.')
-  if (rule === NationalityRule.Allow && devMode && !countries.includes('ZKR'))
-    problems.push('Mock IDs carry the nationality ZKR: add "Zero Knowledge Republic" to the list, or turn off mock IDs.')
+  if (setup && setup.computeWindow < setup.remoteFinalityWindow) {
+    problems.push("The network gives computation less time than Aztec needs to deliver a poll's input root, so polls cannot be created.")
+  }
+  const minDuration = Math.max(MIN_DURATION, setup?.minVotingDuration ?? 0)
+  // The program refuses a window that opens before the worst-case key setup has run out; the transaction lands a little after this page.
+  const earliestStart = setup && setup.minVotingDuration > 0 ? setup.keyReservation + SUBMIT_SLACK : 0
+  const latestClose = setup ? setup.maxSpan - SUBMIT_SLACK : undefined
+  const timingProblem =
+    startDelay < earliestStart
+      ? `Voting must open at least ${formatDuration(earliestStart)} from now: the committee needs up to ${formatDuration(setup!.keyReservation)} to generate the poll's key.`
+      : duration < minDuration
+        ? `Voting must last at least ${formatDuration(minDuration)}.`
+        : latestClose !== undefined && startDelay + duration > latestClose
+          ? `The network caps a round: voting must close within ${formatDuration(latestClose)} of creating the poll.`
+          : undefined
+  if (timingProblem) problems.push(timingProblem)
 
   const insufficient = fee.data !== undefined && balance !== undefined && balance < fee.data
 
@@ -190,26 +243,21 @@ export function CreatePollPage() {
         paramSet: PARAM_SET,
         computeProviderParams: stringToHex(COMPUTE_PROVIDER_PARAMS),
         expectedCryptoConfigId: CRYPTO_CONFIG_ID[PARAM_SET],
+        minAge: BigInt(minAge),
+        allowMockDocuments,
         maxFee,
-        policy: {
-          minAge,
-          nationalityRule: rule,
-          countries: rule === NationalityRule.Any ? [] : countries,
-          faceMatch,
-          devMode,
-        },
       } as const
       const { request: simulated } = await publicClient.simulateContract({
         account: address,
         address: BOARD_ADDRESS,
-        abi: crispSignalAbi,
+        abi: crispSignalAztecAbi,
         functionName: 'createPoll',
         args: [request],
       })
       const hash = await writeContractAsync(simulated)
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
       if (receipt.status !== 'success') throw new Error('The poll transaction reverted.')
-      const [created] = parseEventLogs({ abi: crispSignalAbi, eventName: 'PollCreated', logs: receipt.logs })
+      const [created] = parseEventLogs({ abi: crispSignalAztecAbi, eventName: 'PollCreated', logs: receipt.logs })
       await queryClient.invalidateQueries({ queryKey: ['polls'] })
       navigate(`/poll/${created.args.pollId}`)
     } catch (e) {
@@ -288,8 +336,8 @@ export function CreatePollPage() {
           <section className="card stack">
             <h2>Who can vote</h2>
             <p className="muted small">
-              Voters prove these facts about their passport or national ID with ZKPassport. The poll contract checks the
-              proof on-chain and admits each document once; it never learns who the voter is.
+              Voters prove these facts about their passport or national ID with ZKPassport. The poll's Aztec contract checks
+              the proof and admits each document once; it never learns who the voter is. No Ethereum wallet is needed to vote.
             </p>
             <div className="field">
               <label htmlFor="age">Minimum age</label>
@@ -309,44 +357,12 @@ export function CreatePollPage() {
                 </span>
               </div>
             </div>
-            <div className="field">
-              <span className="label">Nationality</span>
-              <div className="segmented" role="tablist">
-                {[
-                  [NationalityRule.Any, 'Any'],
-                  [NationalityRule.Allow, 'Only these'],
-                  [NationalityRule.Deny, 'All except'],
-                ].map(([value, label]) => (
-                  <button type="button" key={value} className={rule === value ? 'active' : ''} onClick={() => setRule(value as NationalityRule)}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {rule !== NationalityRule.Any && (
-                <>
-                  <span className="hint">
-                    {rule === NationalityRule.Allow
-                      ? 'Only nationals of the selected countries can vote.'
-                      : 'Nationals of the selected countries cannot vote.'}{' '}
-                    Up to {MAX_COUNTRIES} countries.
-                  </span>
-                  <CountryPicker value={countries} onChange={setCountries} />
-                </>
-              )}
-            </div>
             <label className="toggle">
-              <input type="checkbox" checked={faceMatch} onChange={(e) => setFaceMatch(e.target.checked)} />
-              <span>
-                <strong>Require FaceMatch</strong>
-                <span className="hint">The voter's face must match the document photo (strict mode) before the proof is produced.</span>
-              </span>
-            </label>
-            <label className="toggle">
-              <input type="checkbox" checked={devMode} onChange={(e) => setDevMode(e.target.checked)} />
+              <input type="checkbox" checked={allowMockDocuments} onChange={(e) => setAllowMockDocuments(e.target.checked)} />
               <span>
                 <strong>Accept ZKPassport mock IDs</strong>
                 <span className="hint">
-                  For demos and testing only: anyone can generate mock documents. Mock IDs are 18+ and of nationality ZKR.
+                  For demos and testing only: anyone can generate mock documents. Mock IDs are 18+.
                 </span>
               </span>
             </label>
@@ -357,26 +373,26 @@ export function CreatePollPage() {
           <section className="card stack">
             <h2>Schedule</h2>
             <div className="field">
-              <label htmlFor="start">Voting opens</label>
-              <select id="start" className="select" value={startDelay} onChange={(e) => setStartDelay(Number(e.target.value))}>
-                {START_DELAYS.map((d) => (
-                  <option key={d.seconds} value={d.seconds}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
-              <span className="hint">The committee needs about 20 minutes to generate the poll key.</span>
+              <label htmlFor="start-days">Voting opens in</label>
+              <DurationInput id="start" value={startDelay} onChange={setStartDelay} />
+              <span className="hint">
+                {setup && startDelay < setup.keyReservation
+                  ? `Opens ${when(startDelay)}. The committee key can take up to ${formatDuration(setup.keyReservation)} (usually about 20 minutes); ballots are accepted once it is published.`
+                  : `Opens ${when(startDelay)}. The committee generates the poll key before then.`}
+              </span>
             </div>
             <div className="field">
-              <label htmlFor="duration">Voting lasts</label>
-              <select id="duration" className="select" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
-                {DURATIONS.map((d) => (
-                  <option key={d} value={d}>
-                    {formatDuration(d)}
-                  </option>
-                ))}
-              </select>
+              <label htmlFor="duration-days">Voting lasts</label>
+              <DurationInput id="duration" value={duration} onChange={setDuration} />
+              <span className={timingProblem ? 'hint error' : 'hint'}>
+                {timingProblem ??
+                  `Closes ${when(startDelay + duration)}.${latestClose !== undefined ? ` At most ${formatDuration(Math.max(0, latestClose - startDelay))} with this start.` : ''}`}
+              </span>
             </div>
+            <Notice>
+              Results arrive {RESULT_DELAY} after voting closes: Aztec has to prove the epoch that holds the last ballot before the
+              input root can reach Ethereum, and only then is the tally computed and decrypted.
+            </Notice>
             <div className="field">
               <span className="label">Committee</span>
               <div className="segmented">

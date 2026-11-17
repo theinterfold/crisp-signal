@@ -58,7 +58,7 @@ function PollRow({ poll }: { poll: Poll }) {
         <h3>{metadata.data?.title ?? (metadata.error ? 'Metadata unavailable' : 'Loading…')}</h3>
         {metadata.data && <p className="desc">{metadata.data.description}</p>}
         <div className="chips" style={{ marginTop: 12 }}>
-          {eligibilityChips(poll.policy).map((chip) => (
+          {eligibilityChips(poll).map((chip) => (
             <span className="chip" key={chip}>
               {chip}
             </span>
@@ -68,10 +68,10 @@ function PollRow({ poll }: { poll: Poll }) {
       <div className="poll-side">
         <span className="small">{timing(phase, poll.opensAt, poll.closesAt)}</span>
         <div className="stat-line">
-          Verified voters <strong>{poll.registrants}</strong>
+          Verified voters <strong>{poll.aztec?.members.length ?? '—'}</strong>
         </div>
         <div className="stat-line">
-          Ballots submitted <strong>{poll.ballots}</strong>
+          Inputs on Aztec <strong>{poll.aztec?.inputs ?? '—'}</strong>
         </div>
         <div className="stat-line">
           Options <strong>{poll.numOptions}</strong>

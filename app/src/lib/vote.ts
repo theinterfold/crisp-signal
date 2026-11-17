@@ -1,23 +1,28 @@
 import {
   CrispSDK,
-  encodeSolidityProof,
+  finishBallotProof,
+  finishMaskProof,
   getRoundBfvParams,
+  getZeroVote,
   isCommitteeKeyAuthentic,
+  prepareBallot,
   registeredPreset,
   setCircuits,
-  type BroadcastVoteResponse,
+  slotHeadIndex,
   type CircuitBundle,
   type CircuitPreset,
   type ProofStage,
+  type SlotHead,
 } from '@crisp-e3/sdk'
-import type { Address, Hex } from 'viem'
+import type { CastArguments, Census, CompressedProofResult, CrispAztec, InputAttestation } from '@crisp-e3/aztec'
+import { bytesToHex, hexToBytes, keccak256, recoverAddress, type Address, type Hex } from 'viem'
+import { sign } from 'viem/accounts'
 import { CHAIN, CRISP_SERVER_URL, INTERFOLD_ADDRESS, RPC_URL } from '../config'
-import { crispProgramAbi, interfoldAbi, passportRegistryAbi } from './abi'
+import { interfoldAbi } from './abi'
+import { getClient, loadDeployment, loadServerConfig, loadSdk, slotKeys, invalidateLogs } from './aztec'
 import { publicClient } from './wagmi'
 
-export const crisp = new CrispSDK(CRISP_SERVER_URL, RPC_URL)
-
-export type VoteStep = 'encrypting' | 'signing' | 'proving' | 'submitting' | 'confirming' | 'done'
+export type VoteStep = 'connecting' | 'encrypting' | 'proving' | 'staging' | 'sending' | 'done'
 
 export type VoteProgress = { step: VoteStep; detail?: string; proofStage?: ProofStage; proofIndex?: number; proofTotal?: number }
 
@@ -52,8 +57,9 @@ async function ensureCircuits(paramSet: number) {
 
 /** The committee key from the CRISP server, accepted only if it matches the on-chain commitment. */
 async function committeeKey(e3Id: bigint, commitment: Hex): Promise<Uint8Array> {
+  const server = new CrispSDK(CRISP_SERVER_URL)
   const [publicKey, params] = await Promise.all([
-    crisp.getRoundPublicKey(e3Id),
+    server.getRoundPublicKey(e3Id),
     getRoundBfvParams({ interfoldAddress: INTERFOLD_ADDRESS, e3Id, chainId: CHAIN.id, rpcUrl: RPC_URL }),
   ])
   // Encrypting to an unverified key would let whoever served it read the ballot.
@@ -63,16 +69,187 @@ async function committeeKey(e3Id: bigint, commitment: Hex): Promise<Uint8Array> 
   return publicKey
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+// ---------------------------------------------------------------------------------------------------------------
+// Ciphertexts this browser staged. A re-vote extends the slot's head, whose bytes only the voter (and, once an Aztec epoch
+// is proven, the server) holds: keeping them here lets a voter change their vote straight away.
+// ---------------------------------------------------------------------------------------------------------------
+
+const ciphertextKey = (e3Id: bigint, hash: Hex) => `crisp-signal:ciphertext:v1:${e3Id}:${hash}`
+
+export const ciphertexts = {
+  get: (e3Id: bigint, hash: Hex): Uint8Array | undefined => {
+    const stored = localStorage.getItem(ciphertextKey(e3Id, hash))
+    return stored ? hexToBytes(stored as Hex) : undefined
+  },
+  set: (e3Id: bigint, ciphertext: Uint8Array) => {
+    const hash = keccak256(ciphertext)
+    try {
+      localStorage.setItem(ciphertextKey(e3Id, hash), bytesToHex(ciphertext))
+    } catch (error) {
+      // A full storage only costs the shortcut: the server can serve the head once its epoch is proven.
+      console.warn('Could not keep the ciphertext for re-votes', error)
+    }
+  },
+}
 
 /**
- * A vote is a signed one-hot ballot for the voter's own slot. A mask is an unsigned all-zero ballot
- * for any registered slot: the circuit adds it to the slot's current ciphertext, so the slot's
- * choice is unchanged, and on-chain it is indistinguishable from a vote or a re-vote.
+ * The entry that holds `slot`: the end of its chain of committed inputs, read from Aztec's public logs (which show an input the
+ * moment its block exists), with its bytes from this browser or, failing that, from the server. A new input has to name this entry
+ * as its parent or the tally drops it, so a head that cannot be resolved is an error, never an empty slot.
  */
-export type BallotKind =
-  | { kind: 'vote'; option: number; signBallot: (args: { program: Address; ctCommitment: Hex }) => Promise<Hex> }
-  | { kind: 'mask' }
+async function resolveHead(client: CrispAztec, e3Id: bigint, slot: Address): Promise<SlotHead | undefined> {
+  const logs = (await client.logs('InputCommitted', { e3Id })).filter((log) => log.slot.toLowerCase() === slot.toLowerCase())
+  const index = await slotHeadIndex(
+    logs.map((log) => ({ index: log.index, slot: log.slot, parentIndexPlusOne: log.parentIndexPlusOne })),
+    slot,
+    () => true,
+  )
+  if (index === undefined) return undefined
+  const entry = logs.find((log) => log.index === index)!
+
+  const local = ciphertexts.get(e3Id, entry.encryptedVoteHash)
+  if (local && keccak256(local) === entry.encryptedVoteHash) return { ciphertext: local, index }
+
+  const head = await new CrispSDK(CRISP_SERVER_URL).getPreviousCiphertext(e3Id, slot)
+  if (!head || head.index !== index || keccak256(head.ciphertext) !== entry.encryptedVoteHash) {
+    throw new Error(
+      "This slot's latest ballot is on Aztec, but the CRISP server cannot serve it yet: it reads Aztec once an epoch is proven, " +
+        'about one to two hours after the ballot. Try again later.',
+    )
+  }
+  return head
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Casting
+// ---------------------------------------------------------------------------------------------------------------
+
+// Fold public inputs, in the order the Aztec contract reads them (`buildCast` of `@crisp-e3/aztec`).
+const PI = { PREV_COMMITMENT: 0, CENSUS_ROOT: 4, CT_COMMITMENT: 7, COMMITTEE_KEY: 8 } as const
+
+/** A 64-byte `r ‖ s` signature carries no recovery id, so try both parities. */
+async function isSignedBy(digest: Hex, compact: Hex, signer: Address): Promise<boolean> {
+  if (hexToBytes(compact).length !== 64) throw new Error('The attestation signature must be 64 bytes (r ‖ s)')
+  for (const v of ['1b', '1c']) {
+    const recovered = await recoverAddress({ hash: digest, signature: `${compact}${v}` })
+    if (recovered.toLowerCase() === signer.toLowerCase()) return true
+  }
+  return false
+}
+
+type BuildCastArgs = {
+  e3Id: bigint
+  slot: Address
+  credits: bigint
+  numOptions: number
+  census: Census
+  committeePublicKey: Uint8Array
+  committeeKeyCommitment: Hex
+  availabilitySigner: Address
+  program: Address
+  head: SlotHead | undefined
+  /** Omit for a mask. */
+  vote?: { option: number; signer: Hex }
+  onProgress: (progress: VoteProgress) => void
+}
+
+/**
+ * `buildCast` of `@crisp-e3/aztec`, except that the slot head is the caller's (resolved from Aztec's logs, see
+ * {@link resolveHead}) instead of whatever the server has indexed so far.
+ */
+async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
+  const { availabilityDigest, ballotDigest, inputId, stageInput } = await loadSdk()
+  const { e3Id, slot, program } = args
+  const l1ChainId = CHAIN.id
+  const noun = args.vote ? 'ballot' : 'mask'
+
+  args.onProgress({ step: 'encrypting', detail: `Encrypting the ${noun}` })
+  const zero = getZeroVote(args.numOptions)
+  const vote = args.vote ? zero.map((_, i) => (i === args.vote!.option ? 1 : 0)) : zero
+  const inputs = {
+    censusMode: 'merkle' as const,
+    publicKey: args.committeePublicKey,
+    slotAddress: slot,
+    isMaskVote: !args.vote,
+    numOptions: args.numOptions,
+    vote,
+    merkleLeaves: args.census.leaves,
+    balance: args.credits,
+  }
+  // The head is a pair: its bytes and the tree index they sit at.
+  const prepared = await prepareBallot(args.head ? { ...inputs, previousCiphertext: args.head.ciphertext, previousIndex: args.head.index } : inputs)
+
+  // The digest the contract checks: the voter signs it with the slot's key. A mask carries the same digest and no signature.
+  const digest = ballotDigest({ l1ChainId, program, e3Id, slot, ciphertextCommitment: prepared.ctCommitment })
+  const proving = `Proving the ${noun} is well-formed`
+  const options = {
+    verifierTarget: 'noir-recursive' as const,
+    onProgress: ({ stage, index, total }: { stage: ProofStage; index: number; total: number }) =>
+      args.onProgress({ step: 'proving', detail: proving, proofStage: stage, proofIndex: index, proofTotal: total }),
+  }
+  args.onProgress({ step: 'proving', detail: proving })
+  const result = args.vote
+    ? await finishBallotProof(prepared, digest, await sign({ hash: digest, privateKey: args.vote.signer, to: 'hex' }), options)
+    : await finishMaskProof(prepared, digest, options)
+  if (!result.recursive) throw new Error('The fold proof carries no recursive artifacts')
+
+  const pi = result.publicInputs.map((value) => BigInt(value))
+  if (pi.length !== 9) throw new Error(`The fold proof has ${pi.length} public inputs, expected 9`)
+  if (pi[PI.CENSUS_ROOT] !== args.census.root) throw new Error('The proof was made against a different census root than the one rebuilt from the logs')
+  if (pi[PI.COMMITTEE_KEY] !== BigInt(args.committeeKeyCommitment)) {
+    throw new Error('The committee public key the server serves does not match the key the Aztec contract stored')
+  }
+  if (pi[PI.CT_COMMITMENT] !== BigInt(prepared.ctCommitment)) throw new Error('The proof commits to a different ciphertext than the one prepared')
+
+  args.onProgress({ step: 'staging', detail: `Staging the encrypted ${noun} with the CRISP server` })
+  const encryptedVoteHash = keccak256(bytesToHex(result.encryptedVote))
+  const attestation: InputAttestation = await stageInput(CRISP_SERVER_URL, {
+    e3Id,
+    slot,
+    ciphertext: result.encryptedVote,
+    ciphertextCommitment: prepared.ctCommitment,
+    parentIndexPlusOne: result.parentIndexPlusOne,
+  })
+
+  const id = inputId({
+    program,
+    e3Id,
+    encryptedVoteHash,
+    commitment: prepared.ctCommitment,
+    slot,
+    parentIndexPlusOne: result.parentIndexPlusOne,
+  })
+  if (attestation.inputId !== id || attestation.encryptedVoteHash !== encryptedVoteHash) {
+    throw new Error('The server attested a different input than the one built')
+  }
+  const attested = availabilityDigest({ l1ChainId, program, e3Id, inputId: id, expiresAt: attestation.expiresAt })
+  if (!(await isSignedBy(attested, attestation.signature, args.availabilitySigner))) {
+    throw new Error('The attestation is not signed by the availability signer')
+  }
+
+  return {
+    e3Id,
+    vk: result.recursive.vkFields.map((field) => BigInt(field)),
+    proof: result.recursive.proofFields.map((field) => BigInt(field)),
+    slot,
+    ctCommitment: prepared.ctCommitment,
+    encryptedVoteHash,
+    parentIndexPlusOne: result.parentIndexPlusOne,
+    prevCommitment: pi[PI.PREV_COMMITMENT],
+    censusRoot: args.census.root,
+    expiresAt: attestation.expiresAt,
+    signature: attestation.signature,
+    encryptedVote: result.encryptedVote,
+    attestation,
+  }
+}
+
+/**
+ * A vote is a signed one-hot ballot for the voter's own slot. A mask is an unsigned all-zero ballot for any registered slot: the
+ * circuit adds it to the slot's current ciphertext, so the slot's choice is unchanged, and on Aztec it is indistinguishable from a
+ * vote or a re-vote.
+ */
+export type BallotKind = { kind: 'vote'; option: number } | { kind: 'mask' }
 
 type SubmitBallotArgs = {
   e3Id: bigint
@@ -80,99 +257,71 @@ type SubmitBallotArgs = {
   slot: Address
   numOptions: number
   ballot: BallotKind
-  /** Sends the server-attested payload from the connected wallet, when the relay hands it back. */
-  publishFromWallet: (args: { program: Address; payload: Hex }) => Promise<Hex>
   onProgress: (progress: VoteProgress) => void
 }
 
 /**
- * Encrypts a ballot to the poll's committee key, binds it with the EIP-712 digest (signed for a
- * vote), proves it in the browser, and stages it with the CRISP server, which attests availability
- * and either relays `publishInput` or hands the payload back for the wallet to send.
+ * Encrypts a ballot to the poll's committee key, proves it in the browser, has the CRISP server stage the ciphertext and attest its
+ * availability, and sends `cast` to the Aztec contract from this browser's account (fees paid by the SponsoredFPC).
  *
- * Votes and masks take the same requests in the same order, so the server cannot tell them apart
- * by the traffic.
+ * Votes and masks take the same requests in the same order, so the server cannot tell them apart by the traffic.
  *
- * @returns The `publishInput` transaction, or null when the server sent it without reporting one.
+ * @returns The Aztec transaction hash.
  */
-export async function submitBallot({ e3Id, slot, numOptions, ballot, publishFromWallet, onProgress }: SubmitBallotArgs) {
+export async function submitBallot({ e3Id, slot, numOptions, ballot, onProgress }: SubmitBallotArgs): Promise<string> {
   const noun = ballot.kind === 'vote' ? 'ballot' : 'mask'
-  onProgress({ step: 'encrypting', detail: 'Fetching the committee key and circuits' })
-  const e3 = await publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'getE3', args: [e3Id] })
-  const program = e3.e3Program
-  const [publicKey, votingPower] = await Promise.all([
-    committeeKey(e3Id, e3.committeePublicKey),
-    // The exact value `publishInput` hands the circuit, read from the contract that verifies it.
-    publicClient.readContract({ address: program, abi: crispProgramAbi, functionName: 'votingPowerOf', args: [e3Id, slot] }),
-    ensureCircuits(e3.paramSet),
-  ])
-
-  const vote = Array.from({ length: numOptions }, (_, i) => (ballot.kind === 'vote' && i === ballot.option ? 1 : 0))
-  onProgress({ step: 'encrypting', detail: `Encrypting the ${noun}` })
-  const prepared = await crisp.prepareBallot({
-    e3Id,
-    programAddress: program,
-    chainId: CHAIN.id,
-    publicKey,
-    slotAddress: slot,
-    isMaskVote: ballot.kind === 'mask',
-    numOptions,
-    vote,
-    censusMode: 'onchain',
-    votingPower,
-  })
-
-  // A mask carries the real digest too: `publishInput` computes one for every input.
-  const digest = await publicClient.readContract({
-    address: program,
-    abi: crispProgramAbi,
-    functionName: 'ballotDigest',
-    args: [e3Id, slot, prepared.ctCommitment],
-  })
-
-  let signature: Hex | undefined
+  onProgress({ step: 'connecting', detail: 'Connecting to Aztec' })
+  const signer = ballot.kind === 'vote' ? slotKeys.get(e3Id) : undefined
   if (ballot.kind === 'vote') {
-    onProgress({ step: 'signing', detail: 'Sign the ballot in your wallet' })
-    signature = await ballot.signBallot({ program, ctCommitment: prepared.ctCommitment })
+    if (!signer) throw new Error("This browser does not hold the key of your slot for this poll, so it cannot sign a ballot for it.")
+    if (slotKeys.address(signer).toLowerCase() !== slot.toLowerCase()) throw new Error('The slot does not belong to the key this browser holds.')
   }
 
-  const proving = `Proving the ${noun} is well-formed`
-  onProgress({ step: 'proving', detail: proving })
-  const proof = await crisp.finishBallot(prepared, digest, signature, {
-    onProgress: ({ stage, index, total }) =>
-      onProgress({ step: 'proving', detail: proving, proofStage: stage, proofIndex: index, proofTotal: total }),
+  const [client, deployment, server, e3] = await Promise.all([
+    getClient(),
+    loadDeployment(),
+    loadServerConfig(),
+    publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'getE3', args: [e3Id] }),
+  ])
+  const round = await client.getRound(e3Id)
+  if (!round) throw new Error('The round is not open on Aztec yet.')
+  const committeeKeyCommitment = await client.getCommitteeKey(e3Id)
+  if (!committeeKeyCommitment) throw new Error('The committee key has not reached Aztec yet.')
+  if (BigInt(committeeKeyCommitment) !== BigInt(e3.committeePublicKey)) {
+    throw new Error("The committee key on Aztec is not the one Interfold published for this poll.")
+  }
+  if (!(await client.isSlotRegistered(e3Id, slot))) throw new Error('That slot is not registered for this poll.')
+
+  onProgress({ step: 'encrypting', detail: 'Fetching the committee key, the census and the circuits' })
+  const [census, committeePublicKey] = await Promise.all([
+    client.getCensus(e3Id),
+    committeeKey(e3Id, e3.committeePublicKey),
+    ensureCircuits(e3.paramSet),
+  ]).then(([c, k]) => [c, k] as const)
+  const head = await resolveHead(client, e3Id, slot)
+
+  const args = await buildCast({
+    e3Id,
+    slot,
+    credits: round.credits,
+    numOptions,
+    census,
+    committeePublicKey,
+    committeeKeyCommitment,
+    availabilitySigner: server.signer,
+    program: deployment.program,
+    head,
+    vote: ballot.kind === 'vote' ? { option: ballot.option, signer: signer! } : undefined,
+    onProgress,
   })
 
-  onProgress({ step: 'submitting', detail: `Staging the encrypted ${noun} with the CRISP server` })
-  let view: BroadcastVoteResponse = await crisp.broadcastVote({ e3Id, encodedProof: encodeSolidityProof(proof) })
-
-  // The server's worker decides who sends the commitment; it can take a while under load.
-  const deadline = Date.now() + 10 * 60_000
-  while (view.status === 'pending_commitment' && !view.tx_hash) {
-    if (!view.job_id) throw new Error(view.message ?? `The CRISP server queued the ${noun} without a job id.`)
-    if (Date.now() > deadline) throw new Error(`The CRISP server has not committed the ${noun} after 10 minutes.`)
-    onProgress({ step: 'submitting', detail: `Waiting for the relay to commit the ${noun}` })
-    await sleep(5_000)
-    view = await crisp.getVoteAvailability(view.job_id)
-  }
-
-  if (view.status === 'failed_broadcast') throw new Error(view.message ?? `The CRISP server refused the ${noun}.`)
-
-  let txHash = (view.tx_hash as Hex | null) ?? null
-  if (!txHash && view.status === 'ready_for_commitment') {
-    if (!view.encoded_proof) throw new Error('The CRISP server returned no attested payload to send.')
-    onProgress({ step: 'submitting', detail: `Confirm the ${noun} transaction in your wallet` })
-    // Sent verbatim: only the server can produce the availability attestation inside it.
-    txHash = await publishFromWallet({ program, payload: view.encoded_proof as Hex })
-  }
-
-  if (txHash) {
-    onProgress({ step: 'confirming', detail: `Waiting for the ${noun} to be mined` })
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
-    if (receipt.status !== 'success') throw new Error(`The ${noun} transaction reverted.`)
-  }
+  onProgress({ step: 'sending', detail: `Proving and sending the ${noun} to Aztec: about a minute, keep this tab open` })
+  const sent = await client.cast(args)
+  // From here the slot's head is this ciphertext, whatever happens next.
+  ciphertexts.set(e3Id, args.encryptedVote)
+  invalidateLogs()
   onProgress({ step: 'done' })
-  return txHash
+  return sent.txHash
 }
 
 /** A uniform index in `[0, total)`: rejection sampling, so no registrant gets more cover than another. */
@@ -186,34 +335,46 @@ function uniformIndex(total: bigint): bigint {
   }
 }
 
-/**
- * A uniformly random verified voter of the poll, as a mask target. Read live from the registry,
- * because voters keep registering during the voting window.
- */
-export async function randomRegistrant(registry: Address): Promise<Address> {
-  const total = await publicClient.readContract({ address: registry, abi: passportRegistryAbi, functionName: 'totalRegistrants' })
-  if (total === 0n) throw new Error('Nobody has verified for this poll yet, so there is no slot to mask.')
-  return publicClient.readContract({ address: registry, abi: passportRegistryAbi, functionName: 'registrantAt', args: [uniformIndex(total)] })
+/** A uniformly random registered slot of the poll, as a mask target. */
+export function randomRegistrant(members: readonly Address[]): Address {
+  if (members.length === 0) throw new Error('Nobody has verified for this poll yet, so there is no slot to mask.')
+  return members[Number(uniformIndex(BigInt(members.length)))]
 }
 
-export type InputKind = BallotKind['kind']
-export type InputReceipt = { at: number; txHash: Hex | null; slot: Address }
+// ---------------------------------------------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------------------------------------------
 
-const receiptKey = (kind: InputKind, e3Id: bigint, account: Address) =>
-  `crisp-signal:${kind}:${CHAIN.id}:${e3Id}:${account.toLowerCase()}`
+/** Registers this browser's slot for the poll with a ZKPassport `compressed` proof bound to this browser's Aztec account. */
+export async function registerSlot(args: { e3Id: bigint; proof: CompressedProofResult }): Promise<{ slot: Address; txHash: string }> {
+  const client = await getClient()
+  const slot = slotKeys.address(slotKeys.getOrCreate(args.e3Id))
+  const sent = await client.register({ e3Id: args.e3Id, slot, proof: args.proof })
+  invalidateLogs()
+  return { slot, txHash: sent.txHash }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Receipts
+// ---------------------------------------------------------------------------------------------------------------
+
+export type InputKind = BallotKind['kind']
+export type InputReceipt = { at: number; txHash: string; slot: Address }
+
+const receiptKey = (kind: InputKind, e3Id: bigint) => `crisp-signal:${kind}:${CHAIN.id}:${e3Id}`
 
 /**
- * This browser's memory of the account's last vote and last mask. Never the option chosen: only
- * that an input was sent, so the page can say "you voted" without the server or chain knowing.
+ * This browser's memory of the last vote and last mask it sent for a poll. Never the option chosen: only that an input was sent, so
+ * the page can say "you voted" without the server or chain knowing.
  */
 export const inputReceipt = {
-  get: (kind: InputKind, e3Id: bigint, account: Address): InputReceipt | null => {
+  get: (kind: InputKind, e3Id: bigint): InputReceipt | null => {
     try {
-      return JSON.parse(localStorage.getItem(receiptKey(kind, e3Id, account)) ?? 'null')
+      return JSON.parse(localStorage.getItem(receiptKey(kind, e3Id)) ?? 'null')
     } catch {
       return null
     }
   },
-  set: (kind: InputKind, e3Id: bigint, account: Address, receipt: Omit<InputReceipt, 'at'>) =>
-    localStorage.setItem(receiptKey(kind, e3Id, account), JSON.stringify({ at: Date.now(), ...receipt })),
+  set: (kind: InputKind, e3Id: bigint, receipt: Omit<InputReceipt, 'at'>) =>
+    localStorage.setItem(receiptKey(kind, e3Id), JSON.stringify({ at: Date.now(), ...receipt })),
 }

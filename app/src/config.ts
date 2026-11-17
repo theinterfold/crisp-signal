@@ -15,14 +15,21 @@ function address(name: string, value: string | undefined): Address {
 const env = import.meta.env
 
 export const CHAIN = sepolia
-/** ZKPassport's name for the chain a proof is bound to. */
-export const ZKPASSPORT_CHAIN = 'ethereum_sepolia' as const
 
 export const RPC_URL: string = env.VITE_SEPOLIA_RPC_URL || 'https://ethereum-sepolia.publicnode.com'
-export const CRISP_SERVER_URL: string = (env.VITE_CRISP_SERVER_URL || 'https://private-crisp.theinterfold.com').replace(
+/** The CRISP server running in Aztec mode (`PROGRAM_KIND=aztec`): it stages ciphertexts and attests availability. */
+export const CRISP_SERVER_URL: string = (env.VITE_CRISP_SERVER_URL || 'https://private-crisp.theinterfold.com/aztec').replace(
   /\/+$/,
   '',
 )
+/** The Aztec node voters transact through, and the one polls are read from. */
+export const AZTEC_NODE_URL: string = (env.VITE_AZTEC_NODE_URL || 'https://aztec-testnet.drpc.org').replace(/\/+$/, '')
+/**
+ * The ZKPassport domain the `CrispAztec` contract was deployed with. ZKPassport shows it to voters and
+ * derives identifiers from it, so it is the host name the app is served from in production, also when
+ * the app runs locally against that deployment.
+ */
+export const ZKPASSPORT_DOMAIN: string = env.VITE_ZKPASSPORT_DOMAIN || 'poll.theinterfold.com'
 export const IPFS_GATEWAY: string = (env.VITE_IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs/').replace(/\/?$/, '/')
 export const WALLETCONNECT_PROJECT_ID: string | undefined = env.VITE_WALLETCONNECT_PROJECT_ID || undefined
 

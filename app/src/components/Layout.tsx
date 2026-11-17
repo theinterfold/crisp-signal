@@ -31,7 +31,7 @@ export function Layout() {
         <div className="container">
           <span>
             Secret ballots by <a href="https://github.com/theinterfold/CRISP">CRISP</a> on{' '}
-            <a href="https://theinterfold.com">the Interfold</a>. Eligibility by{' '}
+            <a href="https://theinterfold.com">the Interfold</a> and <a href="https://aztec.network">Aztec</a>. Eligibility by{' '}
             <a href="https://zkpassport.id">ZKPassport</a>.
           </span>
           <span className="mono">

@@ -1,6 +1,5 @@
 import { BaseError, UserRejectedRequestError } from 'viem'
-import { COUNTRY_NAME } from './countries'
-import { NationalityRule, type Phase, type Policy } from './polls'
+import type { Phase, Poll } from './polls'
 
 export const OPTION_COLORS = ['#3a5e3c', '#a84932', '#7a7d77', '#355a8a', '#8a6a40', '#5a4a8a', '#2f7a6a', '#9a7a30', '#4a6f7a', '#7a4a5e']
 
@@ -53,21 +52,11 @@ export function timing(phase: Phase, opensAt: number, closesAt: number, now = Da
   }
 }
 
-export function countryList(codes: string[]) {
-  return codes.map((c) => COUNTRY_NAME[c] ?? c)
-}
-
 /** Human-readable eligibility rules, one per chip. */
-export function eligibilityChips(policy: Policy): string[] {
+export function eligibilityChips(poll: Pick<Poll, 'minAge' | 'allowMockDocuments'>): string[] {
   const chips = ['One vote per document']
-  if (policy.minAge > 0) chips.push(`Age ${policy.minAge}+`)
-  if (policy.nationalityRule !== NationalityRule.Any) {
-    const names = countryList(policy.countries)
-    const list = names.length <= 3 ? names.join(', ') : `${names.length} countries`
-    chips.push(policy.nationalityRule === NationalityRule.Allow ? `Nationals of ${list}` : `Excludes ${list}`)
-  }
-  if (policy.faceMatch) chips.push('FaceMatch')
-  if (policy.devMode) chips.push('Mock IDs accepted')
+  if (poll.minAge > 0) chips.push(`Age ${poll.minAge}+`)
+  if (poll.allowMockDocuments) chips.push('Mock IDs accepted')
   return chips
 }
 

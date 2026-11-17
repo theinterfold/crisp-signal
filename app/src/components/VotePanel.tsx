@@ -1,30 +1,28 @@
 import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSignTypedData, useWriteContract } from 'wagmi'
-import type { Address, Hex } from 'viem'
+import { useQueryClient } from '@tanstack/react-query'
+import type { Address } from 'viem'
 import { CheckCircle } from '@phosphor-icons/react'
-import { CHAIN } from '../config'
-import { crispProgramAbi, passportRegistryAbi } from '../lib/abi'
+import { exportSecrets, slotKeys } from '../lib/aztec'
 import { errorMessage, formatDate, OPTION_COLORS } from '../lib/format'
 import type { Phase, Poll } from '../lib/polls'
 import { inputReceipt, randomRegistrant, submitBallot, type BallotKind, type InputKind, type VoteProgress, type VoteStep } from '../lib/vote'
-import { publicClient } from '../lib/wagmi'
 import { PassportStep } from './PassportStep'
 import { Notice } from './PollBits'
 
 const STEPS: Record<InputKind, { step: VoteStep; label: string }[]> = {
   vote: [
-    { step: 'encrypting', label: 'Encrypt to the committee key' },
-    { step: 'signing', label: 'Sign the ballot' },
-    { step: 'proving', label: 'Prove it in your browser' },
-    { step: 'submitting', label: 'Submit through the CRISP relay' },
-    { step: 'confirming', label: 'Recorded on-chain' },
+    { step: 'connecting', label: 'Connect to Aztec' },
+    { step: 'encrypting', label: 'Encrypt to the committee key and sign' },
+    { step: 'proving', label: 'Prove the ballot in your browser' },
+    { step: 'staging', label: 'Have the CRISP server store it' },
+    { step: 'sending', label: 'Cast on Aztec' },
   ],
   mask: [
+    { step: 'connecting', label: 'Connect to Aztec' },
     { step: 'encrypting', label: 'Encrypt an empty ballot' },
     { step: 'proving', label: 'Prove it in your browser' },
-    { step: 'submitting', label: 'Submit through the CRISP relay' },
-    { step: 'confirming', label: 'Recorded on-chain' },
+    { step: 'staging', label: 'Have the CRISP server store it' },
+    { step: 'sending', label: 'Cast on Aztec' },
   ],
 }
 
@@ -66,56 +64,62 @@ function Progress({ kind, progress }: { kind: InputKind; progress: VoteProgress 
   )
 }
 
-function TxLink({ hash }: { hash: Hex | null }) {
-  if (!hash) return null
+/** The Aztec transaction, shortened: there is no public explorer link to rely on for the testnet. */
+function TxHash({ hash }: { hash: string }) {
   return (
     <>
       {' '}
-      <a href={`${CHAIN.blockExplorers.default.url}/tx/${hash}`} target="_blank" rel="noreferrer">
-        View transaction
-      </a>
+      <span className="mono" title={hash}>
+        Aztec tx {hash.slice(0, 10)}…{hash.slice(-6)}
+      </span>
     </>
   )
 }
 
-export function VotePanel({ poll, phase, account, options, title }: { poll: Poll; phase: Phase; account: Address; options: string[]; title: string }) {
+function download(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+export function VotePanel({ poll, phase, options, title }: { poll: Poll; phase: Phase; options: string[]; title: string }) {
   const queryClient = useQueryClient()
-  const { signTypedDataAsync } = useSignTypedData()
-  const { writeContractAsync } = useWriteContract()
   const [choice, setChoice] = useState<number>()
   const [running, setRunning] = useState<{ kind: InputKind; progress: VoteProgress }>()
   const [error, setError] = useState<{ kind: InputKind; message: string }>()
-  const [voteReceipt, setVoteReceipt] = useState(() => inputReceipt.get('vote', poll.e3Id, account))
-  const [maskReceipt, setMaskReceipt] = useState(() => inputReceipt.get('mask', poll.e3Id, account))
+  const [voteReceipt, setVoteReceipt] = useState(() => inputReceipt.get('vote', poll.e3Id))
+  const [maskReceipt, setMaskReceipt] = useState(() => inputReceipt.get('mask', poll.e3Id))
   const [changing, setChanging] = useState(false)
+  // Re-render when a registration lands, so the slot key made for it is read again.
+  const [, refresh] = useState(0)
 
-  const registered = useQuery({
-    queryKey: ['registered', poll.registry, account],
-    queryFn: () =>
-      publicClient.readContract({ address: poll.registry, abi: passportRegistryAbi, functionName: 'isRegistered', args: [account] }),
-  })
+  const slotKey = slotKeys.get(poll.e3Id)
+  const slot = slotKey ? slotKeys.address(slotKey) : undefined
+  const members = poll.aztec?.members ?? []
+  const isRegistered = Boolean(slot) && members.some((member) => member.toLowerCase() === slot!.toLowerCase())
 
   const busy = running !== undefined
   const closed = ['tallying', 'decrypting', 'final', 'failed', 'stalled'].includes(phase)
-  const isRegistered = registered.data === true
 
-  async function submit(kind: InputKind, slot: Address, ballot: BallotKind) {
+  async function submit(kind: InputKind, target: Address, ballot: BallotKind) {
     setError(undefined)
-    setRunning({ kind, progress: { step: 'encrypting' } })
+    setRunning({ kind, progress: { step: 'connecting' } })
     try {
       const txHash = await submitBallot({
         e3Id: poll.e3Id,
-        slot,
+        slot: target,
         numOptions: poll.numOptions,
         ballot,
         onProgress: (progress) => setRunning({ kind, progress }),
-        publishFromWallet: ({ program, payload }) =>
-          writeContractAsync({ address: program, abi: crispProgramAbi, functionName: 'publishInput', args: [poll.e3Id, payload] }),
       })
-      inputReceipt.set(kind, poll.e3Id, account, { txHash, slot })
+      inputReceipt.set(kind, poll.e3Id, { txHash, slot: target })
       await queryClient.invalidateQueries({ queryKey: ['poll', poll.id.toString()] })
-      return inputReceipt.get(kind, poll.e3Id, account)
+      return inputReceipt.get(kind, poll.e3Id)
     } catch (e) {
+      console.error(`Casting the ${kind} failed`, e)
       setError({ kind, message: errorMessage(e) })
       return undefined
     } finally {
@@ -124,18 +128,8 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
   }
 
   async function vote() {
-    if (choice === undefined) return
-    const receipt = await submit('vote', account, {
-      kind: 'vote',
-      option: choice,
-      signBallot: ({ program, ctCommitment }) =>
-        signTypedDataAsync({
-          domain: { name: 'CRISP', version: '1', chainId: CHAIN.id, verifyingContract: program },
-          types: { Ballot: [{ name: 'e3Id', type: 'uint256' }, { name: 'slot', type: 'address' }, { name: 'ciphertextCommitment', type: 'bytes32' }] },
-          primaryType: 'Ballot',
-          message: { e3Id: poll.e3Id, slot: account, ciphertextCommitment: ctCommitment },
-        }),
-    })
+    if (choice === undefined || !slot) return
+    const receipt = await submit('vote', slot, { kind: 'vote', option: choice })
     if (receipt) {
       setVoteReceipt(receipt)
       setChanging(false)
@@ -144,14 +138,19 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
   }
 
   async function mask(target: MaskTarget) {
-    let slot: Address
+    let address: Address
     try {
-      slot = target === 'self' ? account : await randomRegistrant(poll.registry)
+      if (target === 'self') {
+        if (!slot) throw new Error('This browser holds no registered slot for this poll.')
+        address = slot
+      } else {
+        address = randomRegistrant(members)
+      }
     } catch (e) {
       setError({ kind: 'mask', message: errorMessage(e) })
       return
     }
-    const receipt = await submit('mask', slot, { kind: 'mask' })
+    const receipt = await submit('mask', address, { kind: 'mask' })
     if (receipt) setMaskReceipt(receipt)
   }
 
@@ -166,18 +165,18 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
             </span>
           )}
         </div>
-        {registered.isPending && <p className="muted small">Checking registration…</p>}
-        {registered.data === false &&
+        {!poll.aztec && <Notice tone="warning">The Aztec node could not be read, so registrations cannot be checked right now.</Notice>}
+        {poll.aztec && !isRegistered &&
           (closed ? (
             <p className="muted small">Voting has closed.</p>
           ) : (
             <>
               <p className="muted small" style={{ marginBottom: 12 }}>
                 Scan with the ZKPassport app and tap your passport or ID card on your phone. The proof reveals only that
-                you meet the rules and that this document has not registered for this poll before; it is bound to your
-                wallet address.
+                you meet the rules and that this document has not registered for this poll before. It is bound to an
+                Aztec account this browser creates for you; no Ethereum wallet is needed.
               </p>
-              <PassportStep poll={poll} account={account} title={title} />
+              <PassportStep poll={poll} title={title} onRegistered={() => refresh((n) => n + 1)} />
             </>
           ))}
       </div>
@@ -191,7 +190,7 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
             <Notice tone="success">
               Ballot cast {formatDate(Math.floor(voteReceipt.at / 1000))}. Nobody, including the committee, can see which
               option you chose; only the final tally is decrypted.
-              <TxLink hash={voteReceipt.txHash} />
+              <TxHash hash={voteReceipt.txHash} />
             </Notice>
             {phase === 'open' && (
               <button className="link-btn" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={() => setChanging(true)}>
@@ -213,9 +212,9 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
                 {option}
               </button>
             ))}
-            {phase === 'preparing' && <Notice>The committee is still generating this poll's key. Voting opens once it is published.</Notice>}
+            {phase === 'preparing' && <Notice>The committee is still generating this poll's key, or the keeper has not yet relayed it to Aztec. Voting opens once it is there.</Notice>}
             {phase === 'scheduled' && <Notice>Voting opens {formatDate(poll.opensAt)}.</Notice>}
-            {phase === 'open' && registered.data === false && <Notice>Verify your ID first; then choose an option.</Notice>}
+            {phase === 'open' && !isRegistered && <Notice>Verify your ID first; then choose an option.</Notice>}
             {running?.kind === 'vote' && <Progress kind="vote" progress={running.progress} />}
             {error?.kind === 'vote' && <Notice tone="error">{error.message}</Notice>}
             <button
@@ -241,19 +240,19 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
             <span className="label">Optional · Add a mask</span>
             <p className="muted small">
               A mask is an empty encrypted ballot added to a verified voter's slot. It never changes anyone's choice, but
-              on-chain it looks exactly like a vote or a re-vote, so nobody can prove from the chain how, or whether, a
+              on Aztec it looks exactly like a vote or a re-vote, so nobody can prove from the chain how, or whether, a
               voter voted. Masking a random voter gives them cover; masking your own slot covers your own activity.
             </p>
             {maskReceipt && running?.kind !== 'mask' && (
               <Notice tone="success">
                 Mask submitted {formatDate(Math.floor(maskReceipt.at / 1000))}.
-                <TxLink hash={maskReceipt.txHash} />
+                <TxHash hash={maskReceipt.txHash} />
               </Notice>
             )}
             {running?.kind === 'mask' && <Progress kind="mask" progress={running.progress} />}
             {error?.kind === 'mask' && <Notice tone="error">{error.message}</Notice>}
             <div className="row">
-              <button className="btn secondary sm" disabled={busy || poll.registrants === 0} onClick={() => mask('random')}>
+              <button className="btn secondary sm" disabled={busy || members.length === 0} onClick={() => mask('random')}>
                 Mask a random voter
               </button>
               <button className="btn secondary sm" disabled={busy || !isRegistered} onClick={() => mask('self')}>
@@ -262,6 +261,15 @@ export function VotePanel({ poll, phase, account, options, title }: { poll: Poll
             </div>
           </div>
         </>
+      )}
+
+      {slotKey && (
+        <p className="muted small">
+          Your slot key and Aztec account live in this browser only; clearing its storage forfeits this registration.{' '}
+          <button className="link-btn" onClick={() => download('crisp-signal-keys.json', exportSecrets())}>
+            Download a backup
+          </button>
+        </p>
       )}
     </div>
   )

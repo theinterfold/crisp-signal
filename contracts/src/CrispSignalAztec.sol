@@ -4,31 +4,29 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IE3RefundManager, IInterfold} from "./interfaces/IInterfold.sol";
-import {IZKPassportVerifier} from "./interfaces/IZKPassport.sol";
-import {PassportRegistry} from "./PassportRegistry.sol";
 
-/// @notice Creates CRISP signalling polls whose electorate is proven with ZKPassport.
-/// @dev Each poll is one Interfold E3 running the CRISP program in `CensusMode.ONCHAIN`, with a fresh
-///      `PassportRegistry` as its census token, `CreditMode.CONSTANT` and one credit: one vote per
-///      registered document. This contract is the E3 requester, so it pays the fee (pulled from the
-///      poll creator) and forwards any refund of a failed E3 back to the creator.
+/// @notice The part of `CRISPAztecProgram` the board reads.
+interface ICrispAztecProgram {
+    function interfold() external view returns (address);
+}
+
+/// @notice Creates CRISP signalling polls whose ballots are cast on Aztec.
+/// @dev Each poll is one Interfold E3 running `CRISPAztecProgram`: eligibility (ZKPassport), the census and
+///      the ballots live on Aztec, the committee, the compute and the tally stay on Ethereum. This contract
+///      is the E3 requester, so it pays the fee (pulled from the poll creator) and forwards any refund of a
+///      failed E3 back to the creator. It is the only L1 transaction a poll needs.
 ///
-///      Poll text and options live off-chain under `metadataCid` (IPFS); the number of options is
-///      fixed on-chain by the E3, which CRISP enforces on every ballot.
-contract CrispSignal {
+///      Poll text and options live off-chain under `metadataCid` (IPFS); the number of options and the
+///      eligibility rules (`minAge`, `allowMockDocuments`) are fixed by the E3's custom parameters, which
+///      the Aztec contract enforces on every registration and ballot.
+contract CrispSignalAztec {
     using SafeERC20 for IERC20;
 
-    /// @dev `CRISPProgram` round parameters: `(token, minVotingPower, numOptions, creditMode,
-    ///      credits, censusMode, votingPowerDivisor)`.
-    uint256 internal constant MIN_VOTING_POWER = 1;
-    uint8 internal constant CREDIT_MODE_CONSTANT = 0;
+    /// @dev One credit per registered document: one vote each.
     uint256 internal constant CREDITS = 1;
-    uint256 internal constant CENSUS_MODE_ONCHAIN = 2;
-    uint256 internal constant VOTING_POWER_DIVISOR = 0;
 
     struct Poll {
         uint256 e3Id;
-        PassportRegistry registry;
         address creator;
         IERC20 feeToken;
         uint64 createdAt;
@@ -38,6 +36,8 @@ contract CrispSignal {
     /// @param metadataCid IPFS CID of the poll's title, description and option labels.
     /// @param numOptions Number of options, 2 to 10 (CRISP's limit).
     /// @param inputWindow Unix seconds `[start, end]` during which ballots are accepted.
+    /// @param minAge Minimum age voters prove with ZKPassport; 0 for none, at most 99.
+    /// @param allowMockDocuments Accept ZKPassport mock documents (testing only).
     /// @param maxFee The most the creator pays, in fee-token units.
     struct PollRequest {
         string metadataCid;
@@ -47,25 +47,17 @@ contract CrispSignal {
         uint8 paramSet;
         bytes computeProviderParams;
         bytes32 expectedCryptoConfigId;
+        uint256 minAge;
+        bool allowMockDocuments;
         uint256 maxFee;
-        PassportRegistry.Policy policy;
     }
 
     IInterfold public immutable INTERFOLD;
     address public immutable CRISP_PROGRAM;
-    IZKPassportVerifier public immutable ZKPASSPORT_VERIFIER;
-    /// @notice The ZKPassport domain of every poll: the host name voters see in the ZKPassport app.
-    string public domain;
 
     Poll[] internal _polls;
 
-    event PollCreated(
-        uint256 indexed pollId,
-        uint256 indexed e3Id,
-        address indexed creator,
-        address registry,
-        string metadataCid
-    );
+    event PollCreated(uint256 indexed pollId, uint256 indexed e3Id, address indexed creator, string metadataCid);
     event RefundForwarded(uint256 indexed pollId, address indexed creator, uint256 amount);
 
     error InvalidConfiguration();
@@ -74,28 +66,21 @@ contract CrispSignal {
     error UnknownPoll(uint256 pollId);
     error NotCreator(address caller);
 
-    constructor(
-        IInterfold interfold,
-        address crispProgram,
-        IZKPassportVerifier zkPassportVerifier,
-        string memory domain_
-    ) {
+    constructor(IInterfold interfold, address crispProgram) {
         if (
             address(interfold).code.length == 0 || crispProgram.code.length == 0
-                || address(zkPassportVerifier).code.length == 0 || bytes(domain_).length == 0
+                || ICrispAztecProgram(crispProgram).interfold() != address(interfold)
         ) revert InvalidConfiguration();
         INTERFOLD = interfold;
         CRISP_PROGRAM = crispProgram;
-        ZKPASSPORT_VERIFIER = zkPassportVerifier;
-        domain = domain_;
     }
 
-    /// @notice Deploys the poll's registry and requests its E3. The caller must have approved this
-    ///         contract for the fee (`getE3Quote`) in Interfold's fee token.
+    /// @notice Requests the poll's E3. The caller must have approved this contract for the fee
+    ///         (`getE3Quote`) in Interfold's fee token. The program validates `numOptions`, `minAge` and
+    ///         the timing of `inputWindow`, and opens the round on Aztec within this transaction.
     function createPoll(PollRequest calldata r) external returns (uint256 pollId, uint256 e3Id) {
         if (bytes(r.metadataCid).length == 0) revert MissingMetadata();
 
-        PassportRegistry registry = new PassportRegistry(ZKPASSPORT_VERIFIER, domain, r.policy);
         IERC20 feeToken = INTERFOLD.feeToken();
         IInterfold.E3RequestParams memory request = IInterfold.E3RequestParams({
             committeeSize: r.committeeSize,
@@ -103,15 +88,7 @@ contract CrispSignal {
             e3Program: CRISP_PROGRAM,
             paramSet: r.paramSet,
             computeProviderParams: r.computeProviderParams,
-            customParams: abi.encode(
-                address(registry),
-                MIN_VOTING_POWER,
-                r.numOptions,
-                CREDIT_MODE_CONSTANT,
-                CREDITS,
-                CENSUS_MODE_ONCHAIN,
-                VOTING_POWER_DIVISOR
-            ),
+            customParams: abi.encode(r.numOptions, CREDITS, r.minAge, r.allowMockDocuments),
             expectedFeeToken: feeToken,
             expectedCryptoConfigId: r.expectedCryptoConfigId,
             maxFee: r.maxFee
@@ -127,8 +104,8 @@ contract CrispSignal {
         feeToken.forceApprove(address(INTERFOLD), 0);
 
         pollId = _polls.length;
-        _polls.push(Poll(e3Id, registry, msg.sender, feeToken, uint64(block.timestamp), r.metadataCid));
-        emit PollCreated(pollId, e3Id, msg.sender, address(registry), r.metadataCid);
+        _polls.push(Poll(e3Id, msg.sender, feeToken, uint64(block.timestamp), r.metadataCid));
+        emit PollCreated(pollId, e3Id, msg.sender, r.metadataCid);
     }
 
     /// @notice Claims the requester refund of a failed poll and forwards it to the poll's creator.

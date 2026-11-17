@@ -4,14 +4,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAccount, useWriteContract } from 'wagmi'
 import { ArrowLeft } from '@phosphor-icons/react'
 import { BOARD_ADDRESS, CHAIN } from '../config'
-import { crispSignalAbi } from '../lib/abi'
-import { countryList, eligibilityChips, errorMessage, formatDate, shortAddress, shortHex, timing } from '../lib/format'
+import { crispSignalAztecAbi } from '../lib/abi'
+import { eligibilityChips, errorMessage, formatDate, shortAddress, shortHex, timing } from '../lib/format'
 import { fetchMetadata } from '../lib/ipfs'
-import { NationalityRule, phaseOf, usePoll, type Phase, type Poll } from '../lib/polls'
+import { phaseOf, usePoll, type Phase, type Poll } from '../lib/polls'
 import { publicClient } from '../lib/wagmi'
 import { Notice, PhaseBadge, Results } from '../components/PollBits'
 import { VotePanel } from '../components/VotePanel'
-import { ConnectButton } from '../components/ConnectButton'
+import { useDeployment } from '../lib/aztec'
 
 const explorer = CHAIN.blockExplorers.default.url
 
@@ -28,7 +28,7 @@ export function PollPage() {
     enabled: Boolean(poll.data),
     staleTime: Infinity,
   })
-  const { address, chainId } = useAccount()
+  const { address } = useAccount()
 
   if (id === undefined) return <Notice tone="error">That is not a poll id.</Notice>
   if (poll.error) return <Notice tone="error">Could not load poll #{id.toString()}: {errorMessage(poll.error)}</Notice>
@@ -75,38 +75,26 @@ export function PollPage() {
           <section className="card">
             <div className="card-title">
               <h2>Results</h2>
-              <span className="eyebrow">{p.ballots} ballots submitted</span>
+              <span className="eyebrow">{p.aztec ? `${p.aztec.inputs} inputs on Aztec` : 'Aztec status unavailable'}</span>
             </div>
             {p.tally ? (
               <Results options={options} tally={p.tally} />
             ) : (
-              <p className="muted small">{resultsPending(phase)}</p>
+              <p className="muted small">{resultsPending(phase, p)}</p>
             )}
           </section>
 
           <Eligibility poll={p} />
-          <Details poll={p} />
+          <Details poll={p} phase={phase} />
         </div>
 
         <aside style={{ position: 'sticky', top: 24 }}>
           <section className="card">
             <div className="card-title">
               <h2>Vote</h2>
-              <span className="eyebrow">{p.registrants} verified</span>
+              <span className="eyebrow">{p.aztec ? `${p.aztec.members.length} verified` : ''}</span>
             </div>
-            {!address ? (
-              <div className="stack">
-                <p className="muted small">Connect the wallet you will vote from. Your ID proof is bound to this address.</p>
-                <ConnectButton />
-              </div>
-            ) : chainId !== CHAIN.id ? (
-              <div className="stack">
-                <Notice tone="warning">Switch your wallet to {CHAIN.name}.</Notice>
-                <ConnectButton />
-              </div>
-            ) : (
-              <VotePanel key={address} poll={p} phase={phase} account={address} options={options} title={title} />
-            )}
+            <VotePanel key={p.e3Id.toString()} poll={p} phase={phase} options={options} title={title} />
           </section>
           {phase === 'failed' && address?.toLowerCase() === p.creator.toLowerCase() && <Refund poll={p} />}
         </aside>
@@ -115,10 +103,13 @@ export function PollPage() {
   )
 }
 
-function resultsPending(phase: Phase) {
+/** What is left once voting has closed, by where the round has got to. */
+function resultsPending(phase: Phase, poll: Poll) {
   switch (phase) {
     case 'tallying':
-      return 'Voting has closed. The tally is being computed over the encrypted ballots.'
+      return poll.rootSubmitted
+        ? 'Voting has closed. The tally is being computed over the encrypted ballots.'
+        : `Voting has closed. The round is sealed on Aztec and its input root reaches Ethereum once Aztec proves the epoch, usually 1–2 hours after the close. The tally is then computed and decrypted, so results follow after that.`
     case 'decrypting':
       return 'The encrypted tally is ready; the committee is decrypting it.'
     case 'failed':
@@ -131,31 +122,25 @@ function resultsPending(phase: Phase) {
 }
 
 function Eligibility({ poll }: { poll: Poll }) {
-  const { policy } = poll
   return (
     <section className="card">
       <h2 style={{ marginBottom: 14 }}>Who can vote</h2>
       <div className="chips" style={{ marginBottom: 14 }}>
-        {eligibilityChips(policy).map((chip) => (
+        {eligibilityChips(poll).map((chip) => (
           <span className="chip" key={chip}>
             {chip}
           </span>
         ))}
       </div>
-      {policy.nationalityRule !== NationalityRule.Any && (
-        <p className="small muted">
-          {policy.nationalityRule === NationalityRule.Allow ? 'Nationals of: ' : 'Excluded nationalities: '}
-          {countryList(policy.countries).join(', ')}.
-        </p>
-      )}
-      {policy.devMode && (
+      {poll.allowMockDocuments && (
         <Notice tone="warning">This poll accepts ZKPassport mock IDs, which anyone can create. Use it for testing only.</Notice>
       )}
     </section>
   )
 }
 
-function Details({ poll }: { poll: Poll }) {
+function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
+  const aztec = useDeployment()
   return (
     <section className="card">
       <h2 style={{ marginBottom: 14 }}>Details</h2>
@@ -166,15 +151,27 @@ function Details({ poll }: { poll: Poll }) {
         <dd>{formatDate(poll.closesAt)}</dd>
         <dt>Options</dt>
         <dd>{poll.numOptions}</dd>
+        <dt>Aztec round</dt>
+        <dd>{aztecRound(poll)}</dd>
+        <dt>Registered voters</dt>
+        <dd>{poll.aztec ? poll.aztec.members.length : '—'}</dd>
+        <dt>Inputs on Aztec</dt>
+        <dd>{poll.aztec ? poll.aztec.inputs : '—'}</dd>
+        {poll.rootSubmitted && (
+          <>
+            <dt>Input root on Ethereum</dt>
+            <dd>delivered</dd>
+          </>
+        )}
+        {phase === 'tallying' && !poll.rootSubmitted && (
+          <>
+            <dt>Input root on Ethereum</dt>
+            <dd>after the Aztec epoch proof</dd>
+          </>
+        )}
         <dt>Interfold E3</dt>
         <dd className="mono" title={poll.e3Id.toString()}>
           {shortHex(poll.e3Id.toString())}
-        </dd>
-        <dt>Census registry</dt>
-        <dd className="mono">
-          <a href={`${explorer}/address/${poll.registry}`} target="_blank" rel="noreferrer">
-            {shortAddress(poll.registry)}
-          </a>
         </dd>
         <dt>CRISP program</dt>
         <dd className="mono">
@@ -182,6 +179,14 @@ function Details({ poll }: { poll: Poll }) {
             {shortAddress(poll.program)}
           </a>
         </dd>
+        {aztec.data && (
+          <>
+            <dt>Aztec contract</dt>
+            <dd className="mono" title={aztec.data.aztecContract}>
+              {shortHex(aztec.data.aztecContract)}
+            </dd>
+          </>
+        )}
         <dt>Metadata</dt>
         <dd className="mono" title={poll.metadataCid}>
           {shortHex(poll.metadataCid)}
@@ -189,6 +194,14 @@ function Details({ poll }: { poll: Poll }) {
       </dl>
     </section>
   )
+}
+
+function aztecRound(poll: Poll) {
+  if (!poll.aztec) return 'unavailable'
+  if (poll.aztec.closed) return 'closed'
+  if (poll.aztec.keyPublished) return 'open for ballots'
+  if (poll.aztec.opened) return 'waiting for the committee key'
+  return 'not opened yet'
 }
 
 function Refund({ poll }: { poll: Poll }) {
@@ -199,7 +212,7 @@ function Refund({ poll }: { poll: Poll }) {
   async function claim() {
     setState({ busy: true })
     try {
-      const hash = await writeContractAsync({ address: BOARD_ADDRESS, abi: crispSignalAbi, functionName: 'claimRefund', args: [poll.id] })
+      const hash = await writeContractAsync({ address: BOARD_ADDRESS, abi: crispSignalAztecAbi, functionName: 'claimRefund', args: [poll.id], chainId: CHAIN.id })
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
       if (receipt.status !== 'success') throw new Error('The refund transaction reverted.')
       setState({ done: true })

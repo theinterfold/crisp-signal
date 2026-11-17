@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-only
+import { readFile } from 'node:fs/promises'
+import type { Plugin as EsbuildPlugin } from 'esbuild'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
@@ -8,6 +10,24 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills'
 const isolation = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
+}
+
+/**
+ * The PXE's SQLite store starts its worker from `new URL('./worker.js', import.meta.url)`. Pre-bundling moves that code away from
+ * the worker file, so under `vite dev` point the URL at the file in place, which Vite then serves and bundles as a worker.
+ * (`vite build` resolves the original URL itself.)
+ */
+function sqliteWorkerUrl(): EsbuildPlugin {
+  return {
+    name: 'sqlite-worker-url',
+    setup(build) {
+      build.onLoad({ filter: /@aztec-labs\/kv-store\/dest\/sqlite-opfs\/store\.js$/ }, async ({ path }) => {
+        const source = await readFile(path, 'utf8')
+        const worker = path.replace(/store\.js$/, 'worker.js')
+        return { contents: source.replace("new URL('./worker.js', import.meta.url)", `new URL('/@fs${worker}', import.meta.url)`), loader: 'js' }
+      })
+    },
+  }
 }
 
 /**
@@ -47,7 +67,7 @@ function apiFunctions(): Plugin {
 export default defineConfig({
   define: { global: 'globalThis' },
   optimizeDeps: {
-    esbuildOptions: { target: 'esnext' },
+    esbuildOptions: { target: 'esnext', plugins: [sqliteWorkerUrl()] },
     include: ['@crisp-e3/sdk > poseidon-lite'],
     // Pre-bundling breaks the worker URLs these packages resolve relative to themselves.
     exclude: [
@@ -55,6 +75,8 @@ export default defineConfig({
       '@noir-lang/acvm_js',
       '@noir-lang/noir_js',
       '@aztec-foundation/bb.js',
+      '@aztec-foundation/noir-acvm_js',
+      '@aztec-foundation/noir-noirc_abi',
       '@aztec/bb.js',
       '@crisp-e3/sdk',
       '@crisp-e3/sdk/insecure-64',

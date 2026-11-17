@@ -1,6 +1,6 @@
 import { parseAbi } from 'viem'
 
-export { crispSignalAbi, passportRegistryAbi } from './contracts.generated'
+export { crispSignalAztecAbi } from './contracts.generated'
 
 export const interfoldAbi = parseAbi([
   'struct E3 { uint256 seed; uint8 committeeSize; uint256 requestBlock; uint256[2] inputWindow; bytes32 encryptionSchemeId; address e3Program; uint8 paramSet; bytes customParams; address decryptionVerifier; address pkVerifier; bytes32 committeePublicKey; bytes32 ciphertextOutput; bytes plaintextOutput; address requester; bytes32 ciphertextCommitment; }',
@@ -9,15 +9,28 @@ export const interfoldAbi = parseAbi([
   'function getE3Stage(uint256 e3Id) view returns (uint8)',
   'function getE3Quote(E3RequestParams requestParams) view returns (uint256 fee)',
   'function feeToken() view returns (address)',
+  'struct E3TimeoutConfig { uint256 dkgWindow; uint256 computeWindow; uint256 decryptionWindow; }',
+  'function getTimeoutConfig() view returns (E3TimeoutConfig)',
+  'function maxDuration() view returns (uint256)',
+  'function ciphernodeRegistry() view returns (address)',
 ])
 
-export const crispProgramAbi = parseAbi([
-  'function publishInput(uint256 e3Id, bytes data)',
-  'function ballotDigest(uint256 e3Id, address slot, bytes32 ciphertextCommitment) view returns (bytes32)',
-  'function votingPowerOf(uint256 e3Id, address slot) view returns (uint256)',
-  'function inputCommitmentDeadline(uint256 e3Id) view returns (uint256)',
+export const ciphernodeRegistryAbi = parseAbi([
+  'function randomnessRequestTimeout() view returns (uint256)',
+  'function sortitionSubmissionWindow() view returns (uint256)',
+])
+
+/** The part of `CRISPAztecProgram` (and its `CRISPRemoteProgram` base) the app reads. */
+export const crispAztecProgramAbi = parseAbi([
+  'function interfold() view returns (address)',
+  'function l2Program() view returns (bytes32)',
+  'function scopeOf(uint256 e3Id) view returns (string)',
+  'function scopeHashOf(uint256 e3Id) view returns (uint256)',
   'function decodeTally(uint256 e3Id) view returns (uint256[] votes)',
-  'function getRoundData(uint256 e3Id) view returns (uint256 merkleRoot, bytes32 paramsHash, uint256 numOptions, uint8 creditMode, uint256 inputRoot, uint40 numberOfVotes)',
+  'function minVotingDuration() view returns (uint256)',
+  'function remoteFinalityWindow() view returns (uint256)',
+  'struct Round { bytes32 paramsHash; uint256 numOptions; uint256 inputLimit; bool keyRelayed; bool rootSubmitted; uint256 inputRoot; uint256 numInputs; }',
+  'function getRound(uint256 e3Id) view returns (Round)',
 ])
 
 export const erc20Abi = parseAbi([

@@ -1,6 +1,6 @@
 // Generated from contracts/out (forge build). Regenerate after changing the contracts.
 
-export const crispSignalAbi = [
+export const crispSignalAztecAbi = [
   {
     "type": "constructor",
     "inputs": [
@@ -13,16 +13,6 @@ export const crispSignalAbi = [
         "name": "crispProgram",
         "type": "address",
         "internalType": "address"
-      },
-      {
-        "name": "zkPassportVerifier",
-        "type": "address",
-        "internalType": "contract IZKPassportVerifier"
-      },
-      {
-        "name": "domain_",
-        "type": "string",
-        "internalType": "string"
       }
     ],
     "stateMutability": "nonpayable"
@@ -55,19 +45,6 @@ export const crispSignalAbi = [
   },
   {
     "type": "function",
-    "name": "ZKPASSPORT_VERIFIER",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "contract IZKPassportVerifier"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "claimRefund",
     "inputs": [
       {
@@ -92,7 +69,7 @@ export const crispSignalAbi = [
       {
         "name": "r",
         "type": "tuple",
-        "internalType": "struct CrispSignal.PollRequest",
+        "internalType": "struct CrispSignalAztec.PollRequest",
         "components": [
           {
             "name": "metadataCid",
@@ -130,41 +107,19 @@ export const crispSignalAbi = [
             "internalType": "bytes32"
           },
           {
-            "name": "maxFee",
+            "name": "minAge",
             "type": "uint256",
             "internalType": "uint256"
           },
           {
-            "name": "policy",
-            "type": "tuple",
-            "internalType": "struct PassportRegistry.Policy",
-            "components": [
-              {
-                "name": "minAge",
-                "type": "uint8",
-                "internalType": "uint8"
-              },
-              {
-                "name": "nationalityRule",
-                "type": "uint8",
-                "internalType": "enum PassportRegistry.NationalityRule"
-              },
-              {
-                "name": "countries",
-                "type": "string[]",
-                "internalType": "string[]"
-              },
-              {
-                "name": "faceMatch",
-                "type": "bool",
-                "internalType": "bool"
-              },
-              {
-                "name": "devMode",
-                "type": "bool",
-                "internalType": "bool"
-              }
-            ]
+            "name": "allowMockDocuments",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "maxFee",
+            "type": "uint256",
+            "internalType": "uint256"
           }
         ]
       }
@@ -185,19 +140,6 @@ export const crispSignalAbi = [
   },
   {
     "type": "function",
-    "name": "domain",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "getPoll",
     "inputs": [
       {
@@ -210,17 +152,12 @@ export const crispSignalAbi = [
       {
         "name": "",
         "type": "tuple",
-        "internalType": "struct CrispSignal.Poll",
+        "internalType": "struct CrispSignalAztec.Poll",
         "components": [
           {
             "name": "e3Id",
             "type": "uint256",
             "internalType": "uint256"
-          },
-          {
-            "name": "registry",
-            "type": "address",
-            "internalType": "contract PassportRegistry"
           },
           {
             "name": "creator",
@@ -271,17 +208,12 @@ export const crispSignalAbi = [
       {
         "name": "page",
         "type": "tuple[]",
-        "internalType": "struct CrispSignal.Poll[]",
+        "internalType": "struct CrispSignalAztec.Poll[]",
         "components": [
           {
             "name": "e3Id",
             "type": "uint256",
             "internalType": "uint256"
-          },
-          {
-            "name": "registry",
-            "type": "address",
-            "internalType": "contract PassportRegistry"
           },
           {
             "name": "creator",
@@ -341,12 +273,6 @@ export const crispSignalAbi = [
         "name": "creator",
         "type": "address",
         "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "registry",
-        "type": "address",
-        "indexed": false,
         "internalType": "address"
       },
       {
@@ -437,455 +363,6 @@ export const crispSignalAbi = [
     "inputs": [
       {
         "name": "pollId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  }
-] as const
-
-export const passportRegistryAbi = [
-  {
-    "type": "constructor",
-    "inputs": [
-      {
-        "name": "rootVerifier",
-        "type": "address",
-        "internalType": "contract IZKPassportVerifier"
-      },
-      {
-        "name": "domain_",
-        "type": "string",
-        "internalType": "string"
-      },
-      {
-        "name": "policy_",
-        "type": "tuple",
-        "internalType": "struct PassportRegistry.Policy",
-        "components": [
-          {
-            "name": "minAge",
-            "type": "uint8",
-            "internalType": "uint8"
-          },
-          {
-            "name": "nationalityRule",
-            "type": "uint8",
-            "internalType": "enum PassportRegistry.NationalityRule"
-          },
-          {
-            "name": "countries",
-            "type": "string[]",
-            "internalType": "string[]"
-          },
-          {
-            "name": "faceMatch",
-            "type": "bool",
-            "internalType": "bool"
-          },
-          {
-            "name": "devMode",
-            "type": "bool",
-            "internalType": "bool"
-          }
-        ]
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "PROOF_VALIDITY",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "ROOT_VERIFIER",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "contract IZKPassportVerifier"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "accountOf",
-    "inputs": [
-      {
-        "name": "identifier",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "domain",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getPastVotes",
-    "inputs": [
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "isRegistered",
-    "inputs": [
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "policy",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "tuple",
-        "internalType": "struct PassportRegistry.Policy",
-        "components": [
-          {
-            "name": "minAge",
-            "type": "uint8",
-            "internalType": "uint8"
-          },
-          {
-            "name": "nationalityRule",
-            "type": "uint8",
-            "internalType": "enum PassportRegistry.NationalityRule"
-          },
-          {
-            "name": "countries",
-            "type": "string[]",
-            "internalType": "string[]"
-          },
-          {
-            "name": "faceMatch",
-            "type": "bool",
-            "internalType": "bool"
-          },
-          {
-            "name": "devMode",
-            "type": "bool",
-            "internalType": "bool"
-          }
-        ]
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "register",
-    "inputs": [
-      {
-        "name": "params",
-        "type": "tuple",
-        "internalType": "struct IZKPassportVerifier.ProofVerificationParams",
-        "components": [
-          {
-            "name": "version",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "proofVerificationData",
-            "type": "tuple",
-            "internalType": "struct IZKPassportVerifier.ProofVerificationData",
-            "components": [
-              {
-                "name": "vkeyHash",
-                "type": "bytes32",
-                "internalType": "bytes32"
-              },
-              {
-                "name": "proof",
-                "type": "bytes",
-                "internalType": "bytes"
-              },
-              {
-                "name": "publicInputs",
-                "type": "bytes32[]",
-                "internalType": "bytes32[]"
-              }
-            ]
-          },
-          {
-            "name": "committedInputs",
-            "type": "bytes",
-            "internalType": "bytes"
-          },
-          {
-            "name": "serviceConfig",
-            "type": "tuple",
-            "internalType": "struct IZKPassportVerifier.ServiceConfig",
-            "components": [
-              {
-                "name": "validityPeriodInSeconds",
-                "type": "uint256",
-                "internalType": "uint256"
-              },
-              {
-                "name": "domain",
-                "type": "string",
-                "internalType": "string"
-              },
-              {
-                "name": "scope",
-                "type": "string",
-                "internalType": "string"
-              },
-              {
-                "name": "devMode",
-                "type": "bool",
-                "internalType": "bool"
-              }
-            ]
-          }
-        ]
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "registrantAt",
-    "inputs": [
-      {
-        "name": "index",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "registrants",
-    "inputs": [
-      {
-        "name": "start",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "count",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "page",
-        "type": "address[]",
-        "internalType": "address[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "scope",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "totalRegistrants",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "event",
-    "name": "Registered",
-    "inputs": [
-      {
-        "name": "account",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "index",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "error",
-    "name": "AgeNotProven",
-    "inputs": [
-      {
-        "name": "minAge",
-        "type": "uint8",
-        "internalType": "uint8"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "AlreadyRegistered",
-    "inputs": [
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "DocumentAlreadyRegistered",
-    "inputs": [
-      {
-        "name": "account",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "FaceMatchMissing",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidPolicy",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidProof",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "MissingIdentifier",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NationalityNotProven",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "StringsInsufficientHexLength",
-    "inputs": [
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "length",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "UnexpectedNullifierType",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "WrongBinding",
-    "inputs": [
-      {
-        "name": "senderAddress",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "chainId",
         "type": "uint256",
         "internalType": "uint256"
       }
