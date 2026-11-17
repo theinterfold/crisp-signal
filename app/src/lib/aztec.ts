@@ -97,6 +97,17 @@ export function loadLogs(): Promise<RoundLogs> {
   return value
 }
 
+/** The Aztec transactions behind a round's logs, for linking to an explorer. Both lists are in the order of `members` / commit index. */
+export type RoundTxs = {
+  opened?: string
+  keyPublished?: string
+  closed?: string
+  /** The transaction that registered each census member, parallel to `AztecRound.members`. */
+  members: string[]
+  /** The transaction of every input (vote, re-vote, mask) committed, by commit index. */
+  inputs: string[]
+}
+
 export type AztecRound = {
   opened: boolean
   /** The committee key has reached the Aztec contract: ballots can be cast. */
@@ -105,21 +116,31 @@ export type AztecRound = {
   /** Census members, registration order. */
   members: Address[]
   inputs: number
+  txs: RoundTxs
   logs: RoundLogs
 }
 
 export async function loadRound(e3Id: bigint): Promise<AztecRound> {
   const logs = await loadLogs()
   const mine = <T extends { e3Id: bigint }>(list: T[]) => list.filter((log) => log.e3Id === e3Id)
-  const members = mine(logs.MemberRegistered)
-    .sort((a, b) => a.censusIndex - b.censusIndex)
-    .map((log) => log.slot)
+  const registered = mine(logs.MemberRegistered).sort((a, b) => a.censusIndex - b.censusIndex)
+  const committed = mine(logs.InputCommitted).sort((a, b) => a.index - b.index)
+  const [opened] = mine(logs.RoundOpened)
+  const [keyPublished] = mine(logs.KeyPublished)
+  const [closed] = mine(logs.RoundClosed)
   return {
-    opened: mine(logs.RoundOpened).length > 0,
-    keyPublished: mine(logs.KeyPublished).length > 0,
-    closed: mine(logs.RoundClosed).length > 0,
-    members,
-    inputs: mine(logs.InputCommitted).length,
+    opened: opened !== undefined,
+    keyPublished: keyPublished !== undefined,
+    closed: closed !== undefined,
+    members: registered.map((log) => log.slot),
+    inputs: committed.length,
+    txs: {
+      opened: opened?.origin.txHash,
+      keyPublished: keyPublished?.origin.txHash,
+      closed: closed?.origin.txHash,
+      members: registered.map((log) => log.origin.txHash),
+      inputs: committed.map((log) => log.origin.txHash),
+    },
     logs,
   }
 }
@@ -171,6 +192,18 @@ export const l1Registration = {
   },
   set: (e3Id: bigint, txHash: Hex) => localStorage.setItem(l1RegistrationKey(e3Id), txHash),
   clear: (e3Id: bigint) => localStorage.removeItem(l1RegistrationKey(e3Id)),
+}
+
+/**
+ * The same Ethereum transaction, kept for good: {@link l1Registration} is cleared once the slot is in the census, but the voter can
+ * still want to look the registration up on an explorer. It is public on Ethereum already; this only remembers which one is theirs.
+ */
+export const l1RegistrationTx = {
+  get: (e3Id: bigint): Hex | undefined => {
+    const stored = localStorage.getItem(`crisp-signal:l1-registration-tx:v1:${e3Id}`)
+    return stored && /^0x[0-9a-fA-F]{64}$/.test(stored) ? (stored as Hex) : undefined
+  },
+  set: (e3Id: bigint, txHash: Hex) => localStorage.setItem(`crisp-signal:l1-registration-tx:v1:${e3Id}`, txHash),
 }
 
 /** Every secret this browser holds for the app, as JSON the voter can keep. */

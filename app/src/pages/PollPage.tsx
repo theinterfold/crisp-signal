@@ -1,3 +1,4 @@
+import type { Hex } from 'viem'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -13,8 +14,8 @@ import { Notice, PhaseBadge, Results } from '../components/PollBits'
 import { ConnectButton } from '../components/ConnectButton'
 import { VotePanel } from '../components/VotePanel'
 import { useDeployment } from '../lib/aztec'
-
-const explorer = CHAIN.blockExplorers.default.url
+import { usePollCreationTx } from '../lib/explorer'
+import { ExplorerLink } from '../components/ExplorerLink'
 
 function parseId(raw: string | undefined) {
   return raw && /^\d+$/.test(raw) ? BigInt(raw) : undefined
@@ -55,9 +56,7 @@ export function PollPage() {
           <h1>{title}</h1>
           <p className="muted small" style={{ margin: '10px 0 24px' }}>
             {timing(phase, p.opensAt, p.closesAt)} · Created by{' '}
-            <a href={`${explorer}/address/${p.creator}`} target="_blank" rel="noreferrer" className="mono">
-              {shortAddress(p.creator)}
-            </a>
+            <ExplorerLink chain="l1" kind="address" id={p.creator} label={shortAddress(p.creator)} />
           </p>
           {metadata.error && <Notice tone="warning">Poll details could not be loaded from IPFS: {errorMessage(metadata.error)}</Notice>}
           {optionMismatch && (
@@ -155,12 +154,41 @@ function Eligibility({ poll }: { poll: Poll }) {
   )
 }
 
+/** The first and the latest of a run of Aztec transactions (in order), as explorer links. */
+function TxRange({ txs }: { txs: string[] }) {
+  if (txs.length === 0) return null
+  return (
+    <>
+      {' · '}
+      <ExplorerLink chain="aztec" kind="tx" id={txs[0]} label={txs.length > 1 ? 'first tx' : 'tx'} />
+      {txs.length > 1 && (
+        <>
+          {' · '}
+          <ExplorerLink chain="aztec" kind="tx" id={txs[txs.length - 1]} label="latest tx" />
+        </>
+      )}
+    </>
+  )
+}
+
 function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
   const aztec = useDeployment()
+  const creationTx = usePollCreationTx(poll)
+  const txs = poll.aztec?.txs
   return (
     <section className="card">
       <h2 style={{ marginBottom: 14 }}>Details</h2>
       <dl className="kv">
+        <dt>Created</dt>
+        <dd>
+          {formatDate(poll.createdAt)}
+          {creationTx && (
+            <>
+              {' · '}
+              <ExplorerLink chain="l1" kind="tx" id={creationTx} />
+            </>
+          )}
+        </dd>
         <dt>Voting opens</dt>
         <dd>{formatDate(poll.opensAt)}</dd>
         <dt>Voting closes</dt>
@@ -171,10 +199,40 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
         <dd>{isL1Registration(poll.rules) ? 'on Ethereum, relayed to Aztec' : 'on Aztec'}</dd>
         <dt>Aztec round</dt>
         <dd>{aztecRound(poll)}</dd>
+        {txs?.opened && (
+          <>
+            <dt>Round opened</dt>
+            <dd>
+              <ExplorerLink chain="aztec" kind="tx" id={txs.opened} />
+            </dd>
+          </>
+        )}
+        {txs?.keyPublished && (
+          <>
+            <dt>Key published</dt>
+            <dd>
+              <ExplorerLink chain="aztec" kind="tx" id={txs.keyPublished} />
+            </dd>
+          </>
+        )}
         <dt>Registered voters</dt>
-        <dd>{poll.aztec ? poll.aztec.members.length : '—'}</dd>
+        <dd>
+          {poll.aztec ? poll.aztec.members.length : '—'}
+          {txs && <TxRange txs={txs.members} />}
+        </dd>
         <dt>Inputs on Aztec</dt>
-        <dd>{poll.aztec ? poll.aztec.inputs : '—'}</dd>
+        <dd>
+          {poll.aztec ? poll.aztec.inputs : '—'}
+          {txs && <TxRange txs={txs.inputs} />}
+        </dd>
+        {txs?.closed && (
+          <>
+            <dt>Round closed</dt>
+            <dd>
+              <ExplorerLink chain="aztec" kind="tx" id={txs.closed} />
+            </dd>
+          </>
+        )}
         {poll.rootSubmitted && (
           <>
             <dt>Input root on Ethereum</dt>
@@ -191,17 +249,27 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
         <dd className="mono" title={poll.e3Id.toString()}>
           {shortHex(poll.e3Id.toString())}
         </dd>
-        <dt>CRISP program</dt>
-        <dd className="mono">
-          <a href={`${explorer}/address/${poll.program}`} target="_blank" rel="noreferrer">
-            {shortAddress(poll.program)}
-          </a>
+        <dt>Poll board</dt>
+        <dd>
+          <ExplorerLink chain="l1" kind="address" id={BOARD_ADDRESS} label={shortAddress(BOARD_ADDRESS)} />
         </dd>
+        <dt>CRISP program</dt>
+        <dd>
+          <ExplorerLink chain="l1" kind="address" id={poll.program} label={shortAddress(poll.program)} />
+        </dd>
+        {isL1Registration(poll.rules) && (
+          <>
+            <dt>Registrar</dt>
+            <dd>
+              <ExplorerLink chain="l1" kind="address" id={poll.rules.registrar} label={shortAddress(poll.rules.registrar)} />
+            </dd>
+          </>
+        )}
         {aztec.data && (
           <>
             <dt>Aztec contract</dt>
-            <dd className="mono" title={aztec.data.aztecContract}>
-              {shortHex(aztec.data.aztecContract)}
+            <dd>
+              <ExplorerLink chain="aztec" kind="contract" id={aztec.data.aztecContract} />
             </dd>
           </>
         )}
@@ -239,7 +307,7 @@ function CreatorRefund({ poll }: { poll: Poll }) {
 function Refund({ poll }: { poll: Poll }) {
   const { writeContractAsync } = useWriteContract()
   const queryClient = useQueryClient()
-  const [state, setState] = useState<{ busy?: boolean; error?: string; done?: boolean }>({})
+  const [state, setState] = useState<{ busy?: boolean; error?: string; done?: Hex }>({})
 
   async function claim() {
     setState({ busy: true })
@@ -247,7 +315,7 @@ function Refund({ poll }: { poll: Poll }) {
       const hash = await writeContractAsync({ address: BOARD_ADDRESS, abi: crispSignalAztecAbi, functionName: 'claimRefund', args: [poll.id], chainId: CHAIN.id })
       const receipt = await publicClient.waitForTransactionReceipt({ hash })
       if (receipt.status !== 'success') throw new Error('The refund transaction reverted.')
-      setState({ done: true })
+      setState({ done: hash })
       await queryClient.invalidateQueries({ queryKey: ['poll', poll.id.toString()] })
     } catch (e) {
       setState({ error: errorMessage(e) })
@@ -260,7 +328,9 @@ function Refund({ poll }: { poll: Poll }) {
       <p className="muted small">The round failed. Claim the requester's share of the fee back to your wallet.</p>
       {state.error && <Notice tone="error">{state.error}</Notice>}
       {state.done ? (
-        <Notice tone="success">Refund claimed.</Notice>
+        <Notice tone="success">
+          Refund claimed. <ExplorerLink chain="l1" kind="tx" id={state.done} />
+        </Notice>
       ) : (
         <button className="btn secondary" disabled={state.busy} onClick={claim}>
           {state.busy ? 'Claiming…' : 'Claim refund'}

@@ -2,6 +2,7 @@ import { NavLink, Link, Outlet, useLocation } from 'react-router-dom'
 import logo from '../assets/crisp-logo.svg?raw'
 import { BOARD_ADDRESS, CHAIN } from '../config'
 import { ConnectButton } from './ConnectButton'
+import { ExplorerLink } from './ExplorerLink'
 
 export function Layout() {
   // Only creating a poll (or claiming a failed poll's refund) uses a wallet: voters register and vote without one.
@@ -38,9 +39,7 @@ export function Layout() {
           </span>
           <span className="mono">
             {CHAIN.name} ·{' '}
-            <a href={`${CHAIN.blockExplorers.default.url}/address/${BOARD_ADDRESS}`} target="_blank" rel="noreferrer">
-              board {BOARD_ADDRESS.slice(0, 8)}…
-            </a>
+            <ExplorerLink chain="l1" kind="address" id={BOARD_ADDRESS} label={`board ${BOARD_ADDRESS.slice(0, 8)}…`} />
           </span>
         </div>
       </footer>

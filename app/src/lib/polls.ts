@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { decodeAbiParameters, zeroAddress, type Address } from 'viem'
 import { BOARD_ADDRESS, INTERFOLD_ADDRESS } from '../config'
 import { crispAztecProgramAbi, crispSignalAztecAbi, E3Stage, interfoldAbi } from './abi'
-import { loadRound, loadSdk } from './aztec'
+import { loadRound, loadSdk, type RoundTxs } from './aztec'
 import { publicClient } from './wagmi'
 
 /** ZKPassport nationality rule of a poll: any nationality, only the listed countries, or all but the listed countries. */
@@ -92,6 +92,8 @@ export type AztecStatus = {
   members: Address[]
   /** Inputs committed on Aztec: votes, re-votes and masks. */
   inputs: number
+  /** The Aztec transactions of the round's lifecycle logs, for explorer links. */
+  txs: RoundTxs
 }
 
 export type Poll = {
@@ -157,7 +159,7 @@ async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
       : undefined,
     // The poll is still readable from Ethereum alone when the Aztec node is down.
     loadRound(p.e3Id)
-      .then(({ opened, keyPublished, closed, members, inputs }): AztecStatus => ({ opened, keyPublished, closed, members, inputs }))
+      .then(({ opened, keyPublished, closed, members, inputs, txs }): AztecStatus => ({ opened, keyPublished, closed, members, inputs, txs }))
       .catch((error: unknown) => {
         console.warn('Could not read the poll from Aztec', error)
         return undefined

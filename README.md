@@ -144,6 +144,7 @@ relay client the app uses). `package.json` overrides `@crisp-e3/sdk` so the Azte
 | `VITE_SEPOLIA_RPC_URL` | Ethereum reads |
 | `VITE_CRISP_SERVER_URL` | Hosted CRISP server in Aztec mode (`https://private-crisp.theinterfold.com/aztec`): committee key, ciphertext staging, and `POST /registration/l1` for registrations on Ethereum |
 | `VITE_AZTEC_NODE_URL` | Aztec testnet node (default `https://aztec-testnet.drpc.org`) |
+| `VITE_AZTEC_EXPLORER_URL` | Block explorer Aztec transactions and contracts link to (default `https://testnet.aztecscan.xyz`, Aztec-Scan's testnet instance: `/tx-effects/<hash>`, `/contracts/instances/<address>`) |
 | `VITE_ZKPASSPORT_DOMAIN` | ZKPassport domain of the Aztec contract, for polls that register on Aztec (default `poll.theinterfold.com`). Polls that register on Ethereum use their registrar's `domain()` |
 | `VITE_IPFS_GATEWAY` | Reads poll metadata |
 | `PINATA_JWT` | Server only: `/api/pin` uses it to pin poll metadata. Never bundled |
@@ -154,6 +155,13 @@ server's config is checked against it; for a poll that registers on Ethereum the
 `zkpassport_registrar` must also be the poll's registrar. Only the create page (and a failed poll's
 refund, for its creator) uses a wallet: registering, voting, masking and reading results need none, so
 the wallet button only shows on the create page.
+
+The poll page links every transaction and contract it knows of to a public explorer, in a new tab: Aztec ones
+(the round's opened, key-published, registration, input and closed transactions, read from the contract's
+public logs; the Aztec contract; a voter's own registration, vote and mask transactions) to `VITE_AZTEC_EXPLORER_URL`,
+Ethereum ones (poll creation, the relayed registration, the board, program, registrar and creator) to Sepolia Etherscan.
+The creation transaction is not stored on the board: the app finds the block by the poll's `createdAt` timestamp and reads
+the `PollCreated` event from it.
 
 `npm run dev` serves `/api/pin` through a Vite middleware, the same handler Vercel runs in
 production. Hosting must send `Cross-Origin-Opener-Policy: same-origin` and

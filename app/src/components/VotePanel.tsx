@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Address } from 'viem'
 import { CheckCircle } from '@phosphor-icons/react'
-import { exportSecrets, slotKeys } from '../lib/aztec'
+import { exportSecrets, l1RegistrationTx, slotKeys } from '../lib/aztec'
 import { errorMessage, formatDate, OPTION_COLORS } from '../lib/format'
 import { isL1Registration, type Phase, type Poll } from '../lib/polls'
 import { inputReceipt, randomRegistrant, submitBallot, type BallotKind, type InputKind, type VoteProgress, type VoteStep } from '../lib/vote'
+import { ExplorerLink } from './ExplorerLink'
 import { PassportStep } from './PassportStep'
 import { Notice } from './PollBits'
 
@@ -64,15 +65,40 @@ function Progress({ kind, progress }: { kind: InputKind; progress: VoteProgress 
   )
 }
 
-/** The Aztec transaction, shortened: there is no public explorer link to rely on for the testnet. */
+/** An Aztec transaction of this voter's, linked to the explorer. */
 function TxHash({ hash }: { hash: string }) {
   return (
     <>
       {' '}
-      <span className="mono" title={hash}>
-        Aztec tx {hash.slice(0, 10)}…{hash.slice(-6)}
-      </span>
+      Aztec tx <ExplorerLink chain="aztec" kind="tx" id={hash} />
     </>
+  )
+}
+
+/**
+ * How this browser's slot got into the census: the Ethereum registration (kept by this browser, on polls that register there) and the
+ * Aztec transaction that added it, read from the contract's public logs.
+ */
+function RegistrationTxs({ poll, index }: { poll: Poll; index: number }) {
+  const l1Tx = isL1Registration(poll.rules) ? l1RegistrationTx.get(poll.e3Id) : undefined
+  const aztecTx = poll.aztec?.txs.members[index]
+  if (!l1Tx && !aztecTx) return null
+  return (
+    <p className="muted small" style={{ marginBottom: 0 }}>
+      Registered
+      {l1Tx && (
+        <>
+          {' · Ethereum tx '}
+          <ExplorerLink chain="l1" kind="tx" id={l1Tx} />
+        </>
+      )}
+      {aztecTx && (
+        <>
+          {' · Aztec tx '}
+          <ExplorerLink chain="aztec" kind="tx" id={aztecTx} />
+        </>
+      )}
+    </p>
   )
 }
 
@@ -165,6 +191,7 @@ export function VotePanel({ poll, phase, options, title }: { poll: Poll; phase: 
             </span>
           )}
         </div>
+        {isRegistered && <RegistrationTxs poll={poll} index={members.findIndex((member) => member.toLowerCase() === slot!.toLowerCase())} />}
         {!poll.aztec && <Notice tone="warning">The Aztec node could not be read, so registrations cannot be checked right now.</Notice>}
         {poll.aztec && !isRegistered &&
           (closed ? (

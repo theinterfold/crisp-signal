@@ -27,6 +27,11 @@ export const CRISP_SERVER_URL: string = (env.VITE_CRISP_SERVER_URL || 'https://p
 /** The Aztec node voters transact through, and the one polls are read from. */
 export const AZTEC_NODE_URL: string = (env.VITE_AZTEC_NODE_URL || 'https://aztec-testnet.drpc.org').replace(/\/+$/, '')
 /**
+ * The Aztec block explorer transactions and contracts are linked to: Aztec-Scan's testnet instance, which indexes the testnet the
+ * node above serves. Its pages are `/tx-effects/<hash>` and `/contracts/instances/<address>`.
+ */
+export const AZTEC_EXPLORER_URL: string = (env.VITE_AZTEC_EXPLORER_URL || 'https://testnet.aztecscan.xyz').replace(/\/+$/, '')
+/**
  * The ZKPassport domain the `CrispAztec` contract was deployed with. ZKPassport shows it to voters and
  * derives identifiers from it, so it is the host name the app is served from in production, also when
  * the app runs locally against that deployment.

@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { getAddress, type Address, type Hex } from 'viem'
-import { CHAIN, ZKPASSPORT_DOMAIN } from '../config'
+import { ZKPASSPORT_DOMAIN } from '../config'
 import { crispAztecProgramAbi, zkPassportRegistrarAbi } from '../lib/abi'
-import { assertServerRelaysTo, getClient, getSession, l1Registration, loadRound, loadZkPassportRequirements, slotKeys } from '../lib/aztec'
-import { errorMessage, shortHex } from '../lib/format'
+import { assertServerRelaysTo, getClient, getSession, l1Registration, l1RegistrationTx, loadRound, loadZkPassportRequirements, slotKeys } from '../lib/aztec'
+import { errorMessage } from '../lib/format'
 import { isL1Registration, useRulesCheck, type Poll } from '../lib/polls'
 import { awaitL1Registration, registerSlot, registerSlotOnL1, type L1RegistrationStep } from '../lib/vote'
 import { publicClient } from '../lib/wagmi'
 import { requestPassportProof, type PassportRequest, type ProofSummary } from '../lib/zkpassport'
+import { ExplorerLink } from './ExplorerLink'
 import { Notice } from './PollBits'
 
 type Status = 'idle' | 'opening' | 'waiting' | 'scanned' | 'proving' | 'registering' | 'relaying' | L1RegistrationStep
@@ -109,6 +110,7 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
     setL1Tx(txHash)
     try {
       await awaitL1Registration({ e3Id: poll.e3Id, slot, txHash, onStep: setStatus, signal: controller.signal })
+      l1RegistrationTx.set(poll.e3Id, txHash)
       setL1Tx(undefined)
       await finished()
     } catch (e) {
@@ -233,10 +235,7 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
       )}
       {l1Tx && afterPhone && (
         <p className="muted small">
-          Ethereum transaction{' '}
-          <a className="mono" href={`${CHAIN.blockExplorers.default.url}/tx/${l1Tx}`} target="_blank" rel="noreferrer" title={l1Tx}>
-            {shortHex(l1Tx)}
-          </a>
+          Ethereum transaction <ExplorerLink chain="l1" kind="tx" id={l1Tx} />
         </p>
       )}
       {blocked && <Notice tone="error">{blocked} Do not register for this poll.</Notice>}
