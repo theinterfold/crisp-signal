@@ -946,6 +946,21 @@ main {
   font-size: 12px;
 }
 
+.fold {
+  margin-top: 14px;
+  border-top: 1px solid var(--stroke);
+  padding-top: 12px;
+}
+
+.fold summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.fold[open] summary {
+  margin-bottom: 12px;
+}
+
 .spinner {
   width: 16px;
   height: 16px;

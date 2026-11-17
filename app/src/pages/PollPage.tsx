@@ -219,91 +219,96 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
         <dd>{formatDate(poll.closesAt)}</dd>
         <dt>Options</dt>
         <dd>{poll.numOptions}</dd>
-        <dt>Registration</dt>
-        <dd>{isL1Registration(poll.rules) ? 'on Ethereum, relayed to Aztec' : 'on Aztec'}</dd>
-        <dt>Aztec round</dt>
-        <dd>{aztecRound(poll)}</dd>
-        {txs?.opened && (
-          <>
-            <dt>Round opened</dt>
-            <dd>
-              <ExplorerLink chain="aztec" kind="tx" id={txs.opened} />
-            </dd>
-          </>
-        )}
-        {txs?.keyPublished && (
-          <>
-            <dt>Key published</dt>
-            <dd>
-              <ExplorerLink chain="aztec" kind="tx" id={txs.keyPublished} />
-            </dd>
-          </>
-        )}
-        <dt>Registered voters</dt>
-        <dd>
-          {poll.aztec ? poll.aztec.members.length : '—'}
-          {txs && <TxRange txs={txs.members} />}
-        </dd>
-        <dt>Inputs on Aztec</dt>
-        <dd>
-          {poll.aztec ? poll.aztec.inputs : '—'}
-          {txs && <TxRange txs={txs.inputs} />}
-        </dd>
-        {txs?.closed && (
-          <>
-            <dt>Round closed</dt>
-            <dd>
-              <ExplorerLink chain="aztec" kind="tx" id={txs.closed} />
-            </dd>
-          </>
-        )}
-        {poll.rootSubmitted && (
-          <>
-            <dt>Input root on Ethereum</dt>
-            <dd>
-              {rootTx ? <ExplorerLink chain="l1" kind="tx" id={rootTx} /> : 'delivered'}
-            </dd>
-          </>
-        )}
-        {phase === 'tallying' && !poll.rootSubmitted && (
-          <>
-            <dt>Input root on Ethereum</dt>
-            <dd>after the Aztec epoch proof (about 1–2 hours after the close, an estimate)</dd>
-          </>
-        )}
-        <dt>Interfold E3</dt>
-        <dd className="mono" title={poll.e3Id.toString()}>
-          {shortHex(poll.e3Id.toString())}
-        </dd>
-        <dt>Poll board</dt>
-        <dd>
-          <ExplorerLink chain="l1" kind="address" id={BOARD_ADDRESS} label={shortAddress(BOARD_ADDRESS)} />
-        </dd>
-        <dt>CRISP program</dt>
-        <dd>
-          <ExplorerLink chain="l1" kind="address" id={poll.program} label={shortAddress(poll.program)} />
-        </dd>
-        {isL1Registration(poll.rules) && (
-          <>
-            <dt>Registrar</dt>
-            <dd>
-              <ExplorerLink chain="l1" kind="address" id={poll.rules.registrar} label={shortAddress(poll.rules.registrar)} />
-            </dd>
-          </>
-        )}
-        {aztec.data && (
-          <>
-            <dt>Aztec contract</dt>
-            <dd>
-              <ExplorerLink chain="aztec" kind="contract" id={aztec.data.aztecContract} />
-            </dd>
-          </>
-        )}
-        <dt>Metadata</dt>
-        <dd className="mono" title={poll.metadataCid}>
-          {shortHex(poll.metadataCid)}
-        </dd>
       </dl>
+      <details className="fold">
+        <summary>On-chain details</summary>
+        <dl className="kv">
+          <dt>Registration</dt>
+          <dd>{isL1Registration(poll.rules) ? 'on Ethereum, relayed to Aztec' : 'on Aztec'}</dd>
+          <dt>Aztec round</dt>
+          <dd>{aztecRound(poll)}</dd>
+          {txs?.opened && (
+            <>
+              <dt>Round opened</dt>
+              <dd>
+                <ExplorerLink chain="aztec" kind="tx" id={txs.opened} />
+              </dd>
+            </>
+          )}
+          {txs?.keyPublished && (
+            <>
+              <dt>Key published</dt>
+              <dd>
+                <ExplorerLink chain="aztec" kind="tx" id={txs.keyPublished} />
+              </dd>
+            </>
+          )}
+          <dt>Registered voters</dt>
+          <dd>
+            {poll.aztec ? poll.aztec.members.length : '—'}
+            {txs && <TxRange txs={txs.members} />}
+          </dd>
+          <dt>Inputs on Aztec</dt>
+          <dd>
+            {poll.aztec ? poll.aztec.inputs : '—'}
+            {txs && <TxRange txs={txs.inputs} />}
+          </dd>
+          {txs?.closed && (
+            <>
+              <dt>Round closed</dt>
+              <dd>
+                <ExplorerLink chain="aztec" kind="tx" id={txs.closed} />
+              </dd>
+            </>
+          )}
+          {poll.rootSubmitted && (
+            <>
+              <dt>Input root on Ethereum</dt>
+              <dd>
+                {rootTx ? <ExplorerLink chain="l1" kind="tx" id={rootTx} /> : 'delivered'}
+              </dd>
+            </>
+          )}
+          {phase === 'tallying' && !poll.rootSubmitted && (
+            <>
+              <dt>Input root on Ethereum</dt>
+              <dd>after the Aztec epoch proof (about 1–2 hours after the close, an estimate)</dd>
+            </>
+          )}
+          <dt>Interfold E3</dt>
+          <dd className="mono" title={poll.e3Id.toString()}>
+            {shortHex(poll.e3Id.toString())}
+          </dd>
+          <dt>Poll board</dt>
+          <dd>
+            <ExplorerLink chain="l1" kind="address" id={BOARD_ADDRESS} label={shortAddress(BOARD_ADDRESS)} />
+          </dd>
+          <dt>CRISP program</dt>
+          <dd>
+            <ExplorerLink chain="l1" kind="address" id={poll.program} label={shortAddress(poll.program)} />
+          </dd>
+          {isL1Registration(poll.rules) && (
+            <>
+              <dt>Registrar</dt>
+              <dd>
+                <ExplorerLink chain="l1" kind="address" id={poll.rules.registrar} label={shortAddress(poll.rules.registrar)} />
+              </dd>
+            </>
+          )}
+          {aztec.data && (
+            <>
+              <dt>Aztec contract</dt>
+              <dd>
+                <ExplorerLink chain="aztec" kind="contract" id={aztec.data.aztecContract} />
+              </dd>
+            </>
+          )}
+          <dt>Metadata</dt>
+          <dd className="mono" title={poll.metadataCid}>
+            {shortHex(poll.metadataCid)}
+          </dd>
+        </dl>
+      </details>
     </section>
   )
 }
