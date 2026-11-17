@@ -3,7 +3,7 @@ import { decodeAbiParameters, zeroAddress, type Address } from 'viem'
 import { BOARD_ADDRESS, INTERFOLD_ADDRESS } from '../config'
 import { crispAztecProgramAbi, crispSignalAztecAbi, E3Stage, interfoldAbi } from './abi'
 import { loadRound, loadSdk, type RoundTxs } from './aztec'
-import { publicClient } from './wagmi'
+import { publicClient } from './chain'
 
 /** ZKPassport nationality rule of a poll: any nationality, only the listed countries, or all but the listed countries. */
 export const NationalityMode = { None: 0, In: 1, Out: 2 } as const
@@ -103,6 +103,8 @@ export type Poll = {
   createdAt: number
   metadataCid: string
   program: Address
+  /** The BFV parameter set, which picks the circuits ballots are proved with. */
+  paramSet: number
   stage: E3Stage
   /** Unix seconds. */
   opensAt: number
@@ -144,8 +146,19 @@ export function phaseOf(poll: Pick<Poll, 'stage' | 'opensAt' | 'closesAt' | 'azt
   }
 }
 
+/** The poll is still readable from Ethereum alone when the Aztec node is down. */
+async function loadAztecStatus(e3Id: bigint): Promise<AztecStatus | undefined> {
+  try {
+    const { opened, keyPublished, closed, members, inputs, txs } = await loadRound(e3Id)
+    return { opened, keyPublished, closed, members, inputs, txs }
+  } catch (error) {
+    console.warn('Could not read the poll from Aztec', error)
+    return undefined
+  }
+}
+
 /** Every read is typed by its ABI; the client batches concurrent reads into multicalls. */
-async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
+async function hydrateOne(id: bigint, p: BoardPoll, withAztec: boolean): Promise<Poll> {
   const [stage, e3] = await Promise.all([
     publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'getE3Stage', args: [p.e3Id] }),
     publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'getE3', args: [p.e3Id] }),
@@ -157,13 +170,7 @@ async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
     stage === E3Stage.Complete
       ? publicClient.readContract({ address: program, abi: crispAztecProgramAbi, functionName: 'decodeTally', args: [p.e3Id] })
       : undefined,
-    // The poll is still readable from Ethereum alone when the Aztec node is down.
-    loadRound(p.e3Id)
-      .then(({ opened, keyPublished, closed, members, inputs, txs }): AztecStatus => ({ opened, keyPublished, closed, members, inputs, txs }))
-      .catch((error: unknown) => {
-        console.warn('Could not read the poll from Aztec', error)
-        return undefined
-      }),
+    withAztec ? loadAztecStatus(p.e3Id) : undefined,
   ])
   return {
     id,
@@ -172,6 +179,7 @@ async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
     createdAt: Number(p.createdAt),
     metadataCid: p.metadataCid,
     program,
+    paramSet: e3.paramSet,
     stage,
     opensAt: Number(e3.inputWindow[0]),
     closesAt: Number(e3.inputWindow[1]),
@@ -183,6 +191,7 @@ async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
   }
 }
 
+/** The list reads Ethereum only, so it loads without the Aztec stack: a poll's Aztec status is read on its own page. */
 export async function loadPolls(limit = 50): Promise<Poll[]> {
   const count = await publicClient.readContract({ address: BOARD_ADDRESS, abi: crispSignalAztecAbi, functionName: 'pollCount' })
   const [ids, page] = await publicClient.readContract({
@@ -191,7 +200,7 @@ export async function loadPolls(limit = 50): Promise<Poll[]> {
     functionName: 'getPolls',
     args: [count, BigInt(limit)],
   })
-  return Promise.all(page.map((p, i) => hydrateOne(ids[i], p)))
+  return Promise.all(page.map((p, i) => hydrateOne(ids[i], p, false)))
 }
 
 export async function loadPoll(id: bigint): Promise<Poll> {
@@ -201,7 +210,7 @@ export async function loadPoll(id: bigint): Promise<Poll> {
     functionName: 'getPoll',
     args: [id],
   })
-  return hydrateOne(id, poll)
+  return hydrateOne(id, poll, true)
 }
 
 /** The check of {@link checkRules}, once per poll; unavailable while the Aztec SDK cannot load. */

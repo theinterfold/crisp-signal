@@ -31,6 +31,7 @@ export const crispAztecProgramAbi = parseAbi([
   'function remoteFinalityWindow() view returns (uint256)',
   'struct Round { bytes32 paramsHash; uint256 numOptions; uint256 inputLimit; bool keyRelayed; bool rootSubmitted; uint256 inputRoot; uint256 numInputs; }',
   'function getRound(uint256 e3Id) view returns (Round)',
+  'event InputRootSubmitted(uint256 indexed e3Id, uint256 inputRoot, uint256 numInputs)',
 ])
 
 /** The part of `ZKPassportRegistrar` (L1 registration path) the app reads. */

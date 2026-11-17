@@ -1,21 +1,25 @@
-import type { Hex } from 'viem'
-import { useState } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useAccount, useWriteContract } from 'wagmi'
 import { ArrowLeft } from '@phosphor-icons/react'
-import { BOARD_ADDRESS, CHAIN } from '../config'
-import { crispSignalAztecAbi } from '../lib/abi'
+import { BOARD_ADDRESS } from '../config'
 import { countryNames, eligibilityChips, errorMessage, formatDate, shortAddress, shortHex, timing } from '../lib/format'
+import { useNow } from '../lib/clock'
 import { fetchMetadata } from '../lib/ipfs'
 import { isL1Registration, NationalityMode, phaseOf, usePoll, useRulesCheck, type Phase, type Poll } from '../lib/polls'
-import { publicClient } from '../lib/wagmi'
 import { Notice, PhaseBadge, Results } from '../components/PollBits'
-import { ConnectButton } from '../components/ConnectButton'
+import { ResultStatus } from '../components/ResultStatus'
 import { VotePanel } from '../components/VotePanel'
 import { useDeployment } from '../lib/aztec'
-import { usePollCreationTx } from '../lib/explorer'
+import { useInputRootTx, usePollCreationTx } from '../lib/explorer'
+import { warmUp } from '../lib/warmup'
 import { ExplorerLink } from '../components/ExplorerLink'
+
+// The wallet stack loads only for the creator of a failed poll.
+const CreatorRefund = lazy(() => import('../components/CreatorRefund'))
+
+/** A poll that is open or about to open: ballots are coming, so the prover is prepared while the voter reads. */
+const warmsUp = (phase: Phase) => phase === 'open' || phase === 'preparing' || phase === 'scheduled'
 
 function parseId(raw: string | undefined) {
   return raw && /^\d+$/.test(raw) ? BigInt(raw) : undefined
@@ -31,12 +35,25 @@ export function PollPage() {
     staleTime: Infinity,
   })
 
+  // The phase follows the clock: the page re-renders when voting opens or closes (the poll query alone would not, as an unchanged
+  // answer does not re-render it), and then re-reads what only the chain can say (the round opened, the key relayed, the root, the result).
+  const queryClient = useQueryClient()
+  const now = useNow(poll.data ? [poll.data.opensAt, poll.data.closesAt] : [], () =>
+    queryClient.invalidateQueries({ queryKey: ['poll', id?.toString()] }),
+  )
+  const paramSet = poll.data?.paramSet
+  const warm = poll.data !== undefined && warmsUp(phaseOf(poll.data, now))
+  useEffect(() => {
+    // Idempotent, in the background and without proving: the vote, mask and registration flows reuse what it prepares.
+    if (warm && paramSet !== undefined) void warmUp(paramSet)
+  }, [warm, paramSet])
+
   if (id === undefined) return <Notice tone="error">That is not a poll id.</Notice>
   if (poll.error) return <Notice tone="error">Could not load poll #{id.toString()}: {errorMessage(poll.error)}</Notice>
   if (!poll.data) return <p className="muted">Loading poll…</p>
 
   const p = poll.data
-  const phase = phaseOf(p)
+  const phase = phaseOf(p, now)
   const options = metadata.data?.options ?? Array.from({ length: p.numOptions }, (_, i) => `Option ${i + 1}`)
   const title = metadata.data?.title ?? `Poll #${p.id}`
   const optionMismatch = metadata.data && metadata.data.options.length !== p.numOptions
@@ -55,7 +72,7 @@ export function PollPage() {
           </div>
           <h1>{title}</h1>
           <p className="muted small" style={{ margin: '10px 0 24px' }}>
-            {timing(phase, p.opensAt, p.closesAt)} · Created by{' '}
+            {timing(phase, p.opensAt, p.closesAt, now)} · Created by{' '}
             <ExplorerLink chain="l1" kind="address" id={p.creator} label={shortAddress(p.creator)} />
           </p>
           {metadata.error && <Notice tone="warning">Poll details could not be loaded from IPFS: {errorMessage(metadata.error)}</Notice>}
@@ -78,8 +95,16 @@ export function PollPage() {
             </div>
             {p.tally ? (
               <Results options={options} tally={p.tally} />
+            ) : phase === 'tallying' || phase === 'decrypting' ? (
+              <>
+                <p className="muted small" style={{ marginBottom: 14 }}>
+                  Voting has closed. Results take a while: the votes are sealed on Aztec, their root goes to Ethereum, and only then is the tally
+                  computed and decrypted.
+                </p>
+                <ResultStatus poll={p} now={now} />
+              </>
             ) : (
-              <p className="muted small">{resultsPending(phase, p)}</p>
+              <p className="muted small">{resultsPending(phase)}</p>
             )}
           </section>
 
@@ -95,22 +120,20 @@ export function PollPage() {
             </div>
             <VotePanel key={p.e3Id.toString()} poll={p} phase={phase} options={options} title={title} />
           </section>
-          {phase === 'failed' && <CreatorRefund poll={p} />}
+          {phase === 'failed' && (
+            <Suspense fallback={null}>
+              <CreatorRefund poll={p} />
+            </Suspense>
+          )}
         </aside>
       </div>
     </>
   )
 }
 
-/** What is left once voting has closed, by where the round has got to. */
-function resultsPending(phase: Phase, poll: Poll) {
+/** What the Results card says before there is anything to show, outside the closed-and-waiting phases. */
+function resultsPending(phase: Phase) {
   switch (phase) {
-    case 'tallying':
-      return poll.rootSubmitted
-        ? 'Voting has closed. The tally is being computed over the encrypted ballots.'
-        : `Voting has closed. The round is sealed on Aztec and its input root reaches Ethereum once Aztec proves the epoch, usually 1–2 hours after the close. The tally is then computed and decrypted, so results follow after that.`
-    case 'decrypting':
-      return 'The encrypted tally is ready; the committee is decrypting it.'
     case 'failed':
       return 'This round failed before producing a result.'
     case 'stalled':
@@ -175,6 +198,7 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
   const aztec = useDeployment()
   const creationTx = usePollCreationTx(poll)
   const txs = poll.aztec?.txs
+  const rootTx = useInputRootTx(poll)
   return (
     <section className="card">
       <h2 style={{ marginBottom: 14 }}>Details</h2>
@@ -236,13 +260,15 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
         {poll.rootSubmitted && (
           <>
             <dt>Input root on Ethereum</dt>
-            <dd>delivered</dd>
+            <dd>
+              {rootTx ? <ExplorerLink chain="l1" kind="tx" id={rootTx} /> : 'delivered'}
+            </dd>
           </>
         )}
         {phase === 'tallying' && !poll.rootSubmitted && (
           <>
             <dt>Input root on Ethereum</dt>
-            <dd>after the Aztec epoch proof</dd>
+            <dd>after the Aztec epoch proof (about 1–2 hours after the close, an estimate)</dd>
           </>
         )}
         <dt>Interfold E3</dt>
@@ -288,54 +314,4 @@ function aztecRound(poll: Poll) {
   if (poll.aztec.keyPublished) return 'open for ballots'
   if (poll.aztec.opened) return 'waiting for the committee key'
   return 'not opened yet'
-}
-
-/** Only the poll's creator (a wallet user) can claim the refund of a failed round; voters never touch the wallet. */
-function CreatorRefund({ poll }: { poll: Poll }) {
-  const { address } = useAccount()
-  if (address?.toLowerCase() === poll.creator.toLowerCase()) return <Refund poll={poll} />
-  if (address) return null
-  return (
-    <section className="card stack">
-      <h3>Refund</h3>
-      <p className="muted small">The round failed. The creator of this poll can connect the wallet they created it with to claim the fee refund.</p>
-      <ConnectButton />
-    </section>
-  )
-}
-
-function Refund({ poll }: { poll: Poll }) {
-  const { writeContractAsync } = useWriteContract()
-  const queryClient = useQueryClient()
-  const [state, setState] = useState<{ busy?: boolean; error?: string; done?: Hex }>({})
-
-  async function claim() {
-    setState({ busy: true })
-    try {
-      const hash = await writeContractAsync({ address: BOARD_ADDRESS, abi: crispSignalAztecAbi, functionName: 'claimRefund', args: [poll.id], chainId: CHAIN.id })
-      const receipt = await publicClient.waitForTransactionReceipt({ hash })
-      if (receipt.status !== 'success') throw new Error('The refund transaction reverted.')
-      setState({ done: hash })
-      await queryClient.invalidateQueries({ queryKey: ['poll', poll.id.toString()] })
-    } catch (e) {
-      setState({ error: errorMessage(e) })
-    }
-  }
-
-  return (
-    <section className="card stack">
-      <h3>Refund</h3>
-      <p className="muted small">The round failed. Claim the requester's share of the fee back to your wallet.</p>
-      {state.error && <Notice tone="error">{state.error}</Notice>}
-      {state.done ? (
-        <Notice tone="success">
-          Refund claimed. <ExplorerLink chain="l1" kind="tx" id={state.done} />
-        </Notice>
-      ) : (
-        <button className="btn secondary" disabled={state.busy} onClick={claim}>
-          {state.busy ? 'Claiming…' : 'Claim refund'}
-        </button>
-      )}
-    </section>
-  )
 }

@@ -14,7 +14,7 @@ import { loadSdk } from '../lib/aztec'
 import { uploadMetadata } from '../lib/ipfs'
 import { MAX_OPTIONS, type PollMetadata } from '../lib/metadata'
 import { NationalityMode } from '../lib/polls'
-import { publicClient } from '../lib/wagmi'
+import { publicClient } from '../lib/chain'
 
 const MINUTE = 60
 const DAY = 86400

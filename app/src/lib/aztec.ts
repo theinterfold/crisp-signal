@@ -1,12 +1,13 @@
 import type { AztecNode } from '@aztec-labs/stdlib/interfaces/client'
 import type * as SdkModule from '@crisp-e3/aztec'
+import type * as CrispSdkModule from '@crisp-e3/sdk'
 import type { AztecSession, CrispAztec, InputCommitted, MemberRegistered, RoundClosed, RoundOpened, KeyPublished, WithOrigin } from '@crisp-e3/aztec'
 import { useQuery } from '@tanstack/react-query'
 import { getAddress, hexToBigInt, isAddress, type Address, type Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import { AZTEC_NODE_URL, BOARD_ADDRESS, CRISP_SERVER_URL } from '../config'
 import { crispAztecProgramAbi, crispSignalAztecAbi } from './abi'
-import { publicClient } from './wagmi'
+import { publicClient } from './chain'
 import { unpackCircuitsVersion } from './zkpassport'
 
 /*
@@ -20,6 +21,10 @@ export type { AztecSession, CrispAztec }
 let sdkPromise: Promise<typeof SdkModule> | undefined
 /** Dynamic on purpose: keeps the Aztec stack out of the initial bundle. */
 export const loadSdk = () => (sdkPromise ??= import('@crisp-e3/aztec'))
+
+let crispSdkPromise: Promise<typeof CrispSdkModule> | undefined
+/** The CRISP SDK (encryption, the base proofs, bb.js), dynamic for the same reason: only the poll page's voting flows need it. */
+export const loadCrispSdk = () => (crispSdkPromise ??= import('@crisp-e3/sdk'))
 
 // ---------------------------------------------------------------------------------------------------------------
 // Deployment, resolved from L1: the board names the CRISP program, and the program names its Aztec contract.

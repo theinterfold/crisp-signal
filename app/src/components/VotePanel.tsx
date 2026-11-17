@@ -8,7 +8,7 @@ import { isL1Registration, type Phase, type Poll } from '../lib/polls'
 import { inputReceipt, randomRegistrant, submitBallot, type BallotKind, type InputKind, type VoteProgress, type VoteStep } from '../lib/vote'
 import { ExplorerLink } from './ExplorerLink'
 import { PassportStep } from './PassportStep'
-import { Notice } from './PollBits'
+import { Notice, StepRow } from './PollBits'
 
 const STEPS: Record<InputKind, { step: VoteStep; label: string }[]> = {
   vote: [
@@ -30,18 +30,6 @@ const STEPS: Record<InputKind, { step: VoteStep; label: string }[]> = {
 }
 
 type MaskTarget = 'random' | 'self'
-
-function StepRow({ index, label, state, detail }: { index: number; label: string; state: 'done' | 'active' | 'todo'; detail?: string }) {
-  return (
-    <div className={`step ${state === 'todo' ? '' : state}`}>
-      <span className="step-icon">{state === 'done' ? '✓' : state === 'active' ? <span className="spinner" style={{ width: 12, height: 12 }} /> : index}</span>
-      <span>
-        <span className="step-label">{label}</span>
-        {detail && <div className="step-detail">{detail}</div>}
-      </span>
-    </div>
-  )
-}
 
 function Progress({ kind, progress }: { kind: InputKind; progress: VoteProgress }) {
   const steps = STEPS[kind]

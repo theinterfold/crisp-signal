@@ -1,62 +1,21 @@
-import {
-  CrispSDK,
-  finishBallotBaseProofs,
-  finishMaskBaseProofs,
-  getRoundBfvParams,
-  getZeroVote,
-  isCommitteeKeyAuthentic,
-  prepareBallot,
-  registeredPreset,
-  setCircuits,
-  slotHeadIndex,
-  type CircuitBundle,
-  type CircuitPreset,
-  type ProofStage,
-  type SlotHead,
-} from '@crisp-e3/sdk'
+import type { ProofStage, SlotHead } from '@crisp-e3/sdk'
 import type { CastArguments, Census, CompressedProofResult, CrispAztec, InputAttestation, ZKPassportProofParams } from '@crisp-e3/aztec'
 import { bytesToHex, hexToBytes, keccak256, recoverAddress, type Address, type Hex } from 'viem'
 import { sign } from 'viem/accounts'
 import { CHAIN, CRISP_SERVER_URL, INTERFOLD_ADDRESS, RPC_URL } from '../config'
 import { interfoldAbi } from './abi'
-import { getClient, invalidateLogs, l1Registration, loadDeployment, loadRound, loadSdk, loadServerConfig, slotKeys } from './aztec'
-import { publicClient } from './wagmi'
+import { getClient, invalidateLogs, l1Registration, loadCrispSdk, loadDeployment, loadRound, loadSdk, loadServerConfig, slotKeys } from './aztec'
+import { ensureCircuits } from './circuits'
+import { publicClient } from './chain'
+import { warmUp } from './warmup'
 
 export type VoteStep = 'connecting' | 'encrypting' | 'proving' | 'pass' | 'staging' | 'sending' | 'done'
 
 export type VoteProgress = { step: VoteStep; detail?: string; proofStage?: ProofStage; proofIndex?: number; proofTotal?: number }
 
-const CIRCUITS: Record<number, { preset: CircuitPreset; load: () => Promise<{ loadCircuits: () => Promise<CircuitBundle> }> }> = {
-  0: { preset: 'insecure-64', load: () => import('@crisp-e3/sdk/insecure-64') },
-  2: { preset: 'secure-8192', load: () => import('@crisp-e3/sdk/secure-8192') },
-}
-let loading: { preset: CircuitPreset; done: Promise<void> } | undefined
-
-/** Installs the circuits of a round's parameter set, once per session. */
-async function ensureCircuits(paramSet: number) {
-  const entry = CIRCUITS[paramSet]
-  if (!entry) throw new Error(`This poll uses parameter set ${paramSet}, which this app has no circuits for.`)
-  const active = registeredPreset() ?? loading?.preset
-  // Proving against circuits of another preset produces ballots the verifier rejects.
-  if (active && active !== entry.preset) {
-    throw new Error(`Circuits for ${active} are loaded; reload the page to vote on this poll.`)
-  }
-  if (registeredPreset() === entry.preset) return
-  loading ??= {
-    preset: entry.preset,
-    done: entry
-      .load()
-      .then(async ({ loadCircuits }) => setCircuits(await loadCircuits()))
-      .catch((error) => {
-        loading = undefined
-        throw error
-      }),
-  }
-  await loading.done
-}
-
 /** The committee key from the CRISP server, accepted only if it matches the on-chain commitment. */
 async function committeeKey(e3Id: bigint, commitment: Hex): Promise<Uint8Array> {
+  const { CrispSDK, getRoundBfvParams, isCommitteeKeyAuthentic } = await loadCrispSdk()
   const server = new CrispSDK(CRISP_SERVER_URL)
   const [publicKey, params] = await Promise.all([
     server.getRoundPublicKey(e3Id),
@@ -98,6 +57,7 @@ export const ciphertexts = {
  * as its parent or the tally drops it, so a head that cannot be resolved is an error, never an empty slot.
  */
 async function resolveHead(client: CrispAztec, e3Id: bigint, slot: Address): Promise<SlotHead | undefined> {
+  const { CrispSDK, slotHeadIndex } = await loadCrispSdk()
   const logs = (await client.logs('InputCommitted', { e3Id })).filter((log) => log.slot.toLowerCase() === slot.toLowerCase())
   const index = await slotHeadIndex(
     logs.map((log) => ({ index: log.index, slot: log.slot, parentIndexPlusOne: log.parentIndexPlusOne })),
@@ -127,13 +87,19 @@ async function resolveHead(client: CrispAztec, e3Id: bigint, slot: Address): Pro
 
 const stagingCounterKey = (e3Id: bigint) => `crisp-signal:staging-counter:v1:${e3Id}`
 
+const outOfPasses = (max: number) => new Error(`This slot has used all ${max} ballots and masks the CRISP server accepts from one voter in a poll.`)
+
 const stagingCounter = {
-  next: (e3Id: bigint, maxRequests: number): number => {
+  /** Passes this browser has taken for the poll; also what the server counts at most. */
+  used: (e3Id: bigint): number => {
     const used = Number(localStorage.getItem(stagingCounterKey(e3Id)) ?? 0)
     if (!Number.isInteger(used) || used < 0) throw new Error('The staging counter in this browser is corrupt.')
-    if (used >= maxRequests) {
-      throw new Error(`This slot has used all ${maxRequests} ballots and masks the CRISP server accepts from one voter in a poll.`)
-    }
+    return used
+  },
+  /** Takes the next counter. */
+  next: (e3Id: bigint, maxRequests: number): number => {
+    const used = stagingCounter.used(e3Id)
+    if (used >= maxRequests) throw outOfPasses(maxRequests)
     localStorage.setItem(stagingCounterKey(e3Id), String(used + 1))
     return used
   },
@@ -142,6 +108,15 @@ const stagingCounter = {
 // ---------------------------------------------------------------------------------------------------------------
 // Casting
 // ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * The server's answer (400) to a staging pass whose census root it has not seen: `UNKNOWN_ROOT` of the server's
+ * `staging_pass.rs`. It re-reads the remote chain at most every `ROOT_REFRESH_INTERVAL` (5 s) and a voter who registered a moment ago
+ * is told to retry, so one retry a little later, with a fresh pass, is what it asks for.
+ */
+const UNKNOWN_ROOT = 'The staging pass names a census root this round has not had'
+const UNKNOWN_ROOT_RETRY_MS = 6_000
+const isUnknownCensusRoot = (error: unknown) => error instanceof Error && error.message.includes('(400)') && error.message.includes(UNKNOWN_ROOT)
 
 // Public inputs of the ballot (crisp) proof, in the order the circuit declares them (`buildCast` of `@crisp-e3/aztec`).
 const PI = { PREV_COMMITMENT: 0, CENSUS_ROOT: 4, CT_COMMITMENT: 7 } as const
@@ -169,7 +144,7 @@ type BuildCastArgs = {
   program: Address
   head: SlotHead | undefined
   /** The voter's OWN slot key signs the staging pass, for a vote and a mask alike (a mask names another slot, `slot`). */
-  staging: { signer: Hex; maxRequests: number; counter: number }
+  staging: { signer: Hex; maxRequests: number; nextCounter: () => number }
   /** Omit for a mask. */
   vote?: { option: number; signer: Hex }
   onProgress: (progress: VoteProgress) => void
@@ -180,7 +155,11 @@ type BuildCastArgs = {
  * {@link resolveHead}) instead of whatever the server has indexed so far.
  */
 async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
-  const { availabilityDigest, ballotDigest, buildStagingPass, destroyStagingPassProver, inputId, stageInput } = await loadSdk()
+  const [{ availabilityDigest, ballotDigest, buildStagingPass, destroyStagingPassProver, inputId, stageInput }, crisp] = await Promise.all([
+    loadSdk(),
+    loadCrispSdk(),
+  ])
+  const { finishBallotBaseProofs, finishMaskBaseProofs, getZeroVote, prepareBallot } = crisp
   const { e3Id, slot, program } = args
   const l1ChainId = CHAIN.id
   const noun = args.vote ? 'ballot' : 'mask'
@@ -232,24 +211,37 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
     parentIndexPlusOne: result.parentIndexPlusOne,
   }
   // The pass proves, without saying which, that the sender holds the key of SOME registered slot, so the server's storage cannot be
-  // filled by outsiders; its tag limits each slot key to `maxRequests` stagings a round, votes and masks alike.
-  args.onProgress({ step: 'pass', detail: `Proving you hold a registered slot, without saying which (a staging pass for the ${noun})` })
-  let stagingPass
-  try {
-    stagingPass = await buildStagingPass({
-      signer: (hash) => sign({ hash, privateKey: args.staging.signer, to: 'hex' }),
-      census: args.census,
-      credits: args.credits,
-      request: { l1ChainId, program, ...staged },
-      maxRequests: args.staging.maxRequests,
-      counter: args.staging.counter,
-    })
-  } finally {
-    // Frees the pass prover's WASM instance and its SRS; a later pass makes a new one.
-    await destroyStagingPassProver()
+  // filled by outsiders; its tag limits each slot key to `maxRequests` stagings a round, votes and masks alike. Each pass takes the
+  // next counter, and a pass the server refused has used its own.
+  const stagePass = async (): Promise<InputAttestation> => {
+    args.onProgress({ step: 'pass', detail: `Proving you hold a registered slot, without saying which (a staging pass for the ${noun})` })
+    let stagingPass
+    try {
+      stagingPass = await buildStagingPass({
+        signer: (hash) => sign({ hash, privateKey: args.staging.signer, to: 'hex' }),
+        census: args.census,
+        credits: args.credits,
+        request: { l1ChainId, program, ...staged },
+        maxRequests: args.staging.maxRequests,
+        counter: args.staging.nextCounter(),
+      })
+    } finally {
+      // Frees the pass prover's WASM instance and its SRS; a later pass makes a new one.
+      await destroyStagingPassProver()
+    }
+    args.onProgress({ step: 'staging', detail: `Staging the encrypted ${noun} with the CRISP server` })
+    return stageInput(CRISP_SERVER_URL, { ...staged, stagingPass })
   }
-  args.onProgress({ step: 'staging', detail: `Staging the encrypted ${noun} with the CRISP server` })
-  const attestation: InputAttestation = await stageInput(CRISP_SERVER_URL, { ...staged, stagingPass })
+  let attestation: InputAttestation
+  try {
+    attestation = await stagePass()
+  } catch (error) {
+    if (!isUnknownCensusRoot(error)) throw error
+    // The server has not seen the newest registrations of the census yet: it re-reads the chain at most every few seconds.
+    args.onProgress({ step: 'staging', detail: 'Waiting for the server to see the latest registrations…' })
+    await new Promise((resolve) => setTimeout(resolve, UNKNOWN_ROOT_RETRY_MS))
+    attestation = await stagePass()
+  }
 
   const id = inputId({
     program,
@@ -339,9 +331,12 @@ export async function submitBallot({ e3Id, slot, numOptions, ballot, onProgress 
   }
   if (!(await client.isSlotRegistered(e3Id, slot))) throw new Error('That slot is not registered for this poll.')
   if (!(await client.isSlotRegistered(e3Id, slotKeys.address(ownKey)))) throw new Error('This browser\'s slot is not registered for this poll yet.')
-  const counter = stagingCounter.next(e3Id, server.staging_max_requests)
+  // Counters are taken one per pass, as each is built (`staging.nextCounter`), so a voter out of passes learns it here, not mid-proof.
+  if (stagingCounter.used(e3Id) >= server.staging_max_requests) throw outOfPasses(server.staging_max_requests)
 
   onProgress({ step: 'encrypting', detail: 'Fetching the committee key, the census and the circuits' })
+  // Normally done by now: the poll page starts it when it opens. This waits for whatever is left, and never runs it twice.
+  await warmUp(e3.paramSet)
   const [census, committeePublicKey] = await Promise.all([
     client.getCensus(e3Id),
     committeeKey(e3Id, e3.committeePublicKey),
@@ -359,7 +354,7 @@ export async function submitBallot({ e3Id, slot, numOptions, ballot, onProgress 
     availabilitySigner: server.signer,
     program: deployment.program,
     head,
-    staging: { signer: ownKey, maxRequests: server.staging_max_requests, counter },
+    staging: { signer: ownKey, maxRequests: server.staging_max_requests, nextCounter: () => stagingCounter.next(e3Id, server.staging_max_requests) },
     vote: ballot.kind === 'vote' ? { option: ballot.option, signer: ownKey } : undefined,
     onProgress,
   })

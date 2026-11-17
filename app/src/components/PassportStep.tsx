@@ -7,7 +7,7 @@ import { assertServerRelaysTo, getClient, getSession, l1Registration, l1Registra
 import { errorMessage } from '../lib/format'
 import { isL1Registration, useRulesCheck, type Poll } from '../lib/polls'
 import { awaitL1Registration, registerSlot, registerSlotOnL1, type L1RegistrationStep } from '../lib/vote'
-import { publicClient } from '../lib/wagmi'
+import { publicClient } from '../lib/chain'
 import { requestPassportProof, type PassportRequest, type ProofSummary } from '../lib/zkpassport'
 import { ExplorerLink } from './ExplorerLink'
 import { Notice } from './PollBits'

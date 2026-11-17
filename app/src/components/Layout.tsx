@@ -1,13 +1,17 @@
+import { lazy, Suspense } from 'react'
 import { NavLink, Link, Outlet, useLocation } from 'react-router-dom'
 import logo from '../assets/crisp-logo.svg?raw'
 import { BOARD_ADDRESS, CHAIN } from '../config'
-import { ConnectButton } from './ConnectButton'
 import { ExplorerLink } from './ExplorerLink'
+
+// The wallet stack is only for creators, so it loads with the create page.
+const WalletProvider = lazy(() => import('../lib/wallet'))
+const ConnectButton = lazy(() => import('./ConnectButton').then((m) => ({ default: m.ConnectButton })))
 
 export function Layout() {
   // Only creating a poll (or claiming a failed poll's refund) uses a wallet: voters register and vote without one.
   const creating = useLocation().pathname === '/create'
-  return (
+  const page = (
     <>
       <header className="header">
         <div className="container">
@@ -44,5 +48,12 @@ export function Layout() {
         </div>
       </footer>
     </>
+  )
+  return creating ? (
+    <Suspense fallback={null}>
+      <WalletProvider>{page}</WalletProvider>
+    </Suspense>
+  ) : (
+    page
   )
 }

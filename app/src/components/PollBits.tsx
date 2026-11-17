@@ -58,3 +58,15 @@ export function MiniBar({ tally }: { tally: bigint[] }) {
     </div>
   )
 }
+
+export function StepRow({ index, label, state, detail }: { index: number; label: string; state: 'done' | 'active' | 'todo'; detail?: ReactNode }) {
+  return (
+    <div className={`step ${state === 'todo' ? '' : state}`}>
+      <span className="step-icon">{state === 'done' ? '✓' : state === 'active' ? <span className="spinner" style={{ width: 12, height: 12 }} /> : index}</span>
+      <span>
+        <span className="step-label">{label}</span>
+        {detail && <div className="step-detail">{detail}</div>}
+      </span>
+    </div>
+  )
+}

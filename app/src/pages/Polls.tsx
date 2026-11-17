@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from '@phosphor-icons/react'
 import { MiniBar, Notice, PhaseBadge } from '../components/PollBits'
 import { eligibilityChips, errorMessage, timing } from '../lib/format'
+import { useNow } from '../lib/clock'
 import { fetchMetadata } from '../lib/ipfs'
 import { phaseOf, usePolls, type Poll } from '../lib/polls'
 
@@ -45,7 +46,10 @@ export function PollsPage() {
 
 function PollRow({ poll }: { poll: Poll }) {
   const metadata = useQuery({ queryKey: ['metadata', poll.metadataCid], queryFn: () => fetchMetadata(poll.metadataCid), staleTime: Infinity })
-  const phase = phaseOf(poll)
+  // The card follows the clock like the poll page does: its phase changes when voting opens or closes, and the list is re-read then.
+  const queryClient = useQueryClient()
+  const now = useNow([poll.opensAt, poll.closesAt], () => queryClient.invalidateQueries({ queryKey: ['polls'] }))
+  const phase = phaseOf(poll, now)
 
   return (
     <Link to={`/poll/${poll.id}`} className="poll-row">
@@ -66,13 +70,7 @@ function PollRow({ poll }: { poll: Poll }) {
         </div>
       </div>
       <div className="poll-side">
-        <span className="small">{timing(phase, poll.opensAt, poll.closesAt)}</span>
-        <div className="stat-line">
-          Verified voters <strong>{poll.aztec?.members.length ?? '—'}</strong>
-        </div>
-        <div className="stat-line">
-          Inputs on Aztec <strong>{poll.aztec?.inputs ?? '—'}</strong>
-        </div>
+        <span className="small">{timing(phase, poll.opensAt, poll.closesAt, now)}</span>
         <div className="stat-line">
           Options <strong>{poll.numOptions}</strong>
         </div>

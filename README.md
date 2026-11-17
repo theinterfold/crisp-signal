@@ -91,7 +91,8 @@ sequenceDiagram
   pass*, made in the browser with the voter's own slot key: it proves the sender holds the key of some
   registered slot, without saying which, and reveals a one-time tag, so each slot key can stage at most
   `staging_max_requests` ciphertexts per poll (votes and masks together; the app keeps the counter in
-  `localStorage`). Outsiders cannot fill the server's storage.
+  `localStorage`). Outsiders cannot fill the server's storage. If the server has not seen the census
+  root yet (a registration just landed), the app waits about 6 s and retries once with a fresh pass.
 - **Masks**: any registered voter can add an unsigned all-zero ballot to a uniformly random registered
   slot, or to their own. The circuit adds it to the slot's current ciphertext, so no choice changes, but on Aztec
   it is indistinguishable from a vote or a re-vote, which makes vote receipts unreliable.
@@ -99,7 +100,10 @@ sequenceDiagram
   reaches Ethereum only once Aztec has proven the epoch (the program waits at least its
   `remoteFinalityWindow`, 3 hours on the current deployment, inside the Interfold's compute window);
   then the tally is computed and decrypted. The app reads the tally from the program's `decodeTally`
-  and a poll's status from Ethereum plus Aztec's public logs.
+  and a poll's status from Ethereum plus Aztec's public logs. While waiting, the poll page lists
+  what is known: the round closed on Aztec (the `RoundClosed` log), the input root on Ethereum (the
+  program's `InputRootSubmitted` event) and the compute, with an *estimated* time for the root
+  (close + 1-2 hours) until it lands.
 
 ## Contracts
 
@@ -161,6 +165,21 @@ server's config is checked against it; for a poll that registers on Ethereum the
 `zkpassport_registrar` must also be the poll's registrar. Only the create page (and a failed poll's
 refund, for its creator) uses a wallet: registering, voting, masking and reading results need none, so
 the wallet button only shows on the create page.
+
+The pages load what they use: the poll list and the About page need only React and viem (about 0.6 MB of JavaScript);
+the create page adds the wallet stack; a poll page loads the Aztec stack, the CRISP SDK and bb.js on demand (the Aztec
+SDK and the CRISP SDK are dynamic imports, so even `import`ing `lib/vote.ts` pulls in none of them). The list therefore
+reads Ethereum only: its rows no longer show voter and input counts, which come from Aztec's logs on the poll's own page.
+When a poll page opens for a poll that is open or about to open it prepares the prover in the background
+(`lib/warmup.ts`), once and without proving: the Aztec session (wallet and PXE), the base circuits with bb.js's workers
+and 2^21-point SRS (started by computing the circuits' verification keys), and the staging pass's SRS. The vote, mask and
+registration flows reuse those objects, so the first proof starts without that wait. Hosting must keep sending the
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers bb.js's threads need.
+
+A poll page (and each card on the list) follows the clock: `lib/clock.ts` sets one timer for the next boundary (voting opens
+or closes, otherwise the next minute for countdown labels) and, when a boundary passes, re-renders with the new phase and refetches
+the poll, so the page changes from "Opens in ..." to open without a reload. Chain state (round opened, key relayed, closed, root,
+result) is refetched every 15 s on a poll page.
 
 The poll page links every transaction and contract it knows of to a public explorer, in a new tab: Aztec ones
 (the round's opened, key-published, registration, input and closed transactions, read from the contract's
