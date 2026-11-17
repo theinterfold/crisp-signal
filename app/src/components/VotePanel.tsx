@@ -15,6 +15,7 @@ const STEPS: Record<InputKind, { step: VoteStep; label: string }[]> = {
     { step: 'connecting', label: 'Connect to Aztec' },
     { step: 'encrypting', label: 'Encrypt to the committee key and sign' },
     { step: 'proving', label: 'Prove the ballot in your browser' },
+    { step: 'pass', label: 'Prove you are a registered voter, anonymously' },
     { step: 'staging', label: 'Have the CRISP server store it' },
     { step: 'sending', label: 'Cast on Aztec' },
   ],
@@ -22,6 +23,7 @@ const STEPS: Record<InputKind, { step: VoteStep; label: string }[]> = {
     { step: 'connecting', label: 'Connect to Aztec' },
     { step: 'encrypting', label: 'Encrypt an empty ballot' },
     { step: 'proving', label: 'Prove it in your browser' },
+    { step: 'pass', label: 'Prove you are a registered voter, anonymously' },
     { step: 'staging', label: 'Have the CRISP server store it' },
     { step: 'sending', label: 'Cast on Aztec' },
   ],
@@ -269,7 +271,8 @@ export function VotePanel({ poll, phase, options, title }: { poll: Poll; phase: 
           <div className="stack" style={{ gap: 10 }}>
             <span className="label">Optional · Add a mask</span>
             <p className="muted small">
-              A mask is an empty encrypted ballot added to a verified voter's slot. It never changes anyone's choice, but
+              A mask is an empty encrypted ballot added to a verified voter's slot. Only verified voters can add one, and each voter's
+              ballots and masks together are capped per poll. It never changes anyone's choice, but
               on Aztec it looks exactly like a vote or a re-vote, so nobody can prove from the chain how, or whether, a
               voter voted. Masking a random voter gives them cover; masking your own slot covers your own activity.
             </p>
@@ -282,7 +285,7 @@ export function VotePanel({ poll, phase, options, title }: { poll: Poll; phase: 
             {running?.kind === 'mask' && <Progress kind="mask" progress={running.progress} />}
             {error?.kind === 'mask' && <Notice tone="error">{error.message}</Notice>}
             <div className="row">
-              <button className="btn secondary sm" disabled={busy || members.length === 0} onClick={() => mask('random')}>
+              <button className="btn secondary sm" disabled={busy || !isRegistered || members.length === 0} onClick={() => mask('random')}>
                 Mask a random voter
               </button>
               <button className="btn secondary sm" disabled={busy || !isRegistered} onClick={() => mask('self')}>

@@ -81,12 +81,19 @@ sequenceDiagram
   `/api/pin` function (`app/api/pin.ts`), which holds the Pinata key server-side and pins only
   well-formed poll documents; the board stores the CID.
 - **Voting** uses `@crisp-e3/sdk`: the committee key comes from the CRISP server and is checked
-  against the key commitment on Aztec, the ballot is proved in the browser (noir-recursive fold
-  proof), staged with the CRISP server, which attests availability, and cast on Aztec. Voters can
+  against the key commitment on Aztec, the ballot is proved in the browser (the three base proofs:
+  two encryption proofs and the ballot proof, with no aggregation; the Aztec contract verifies them
+  itself and checks the ballot is encrypted to the key it stored, and the proofs never leave the
+  device), staged with the CRISP server, which attests availability, and cast on Aztec. Voters can
   recast; the latest ballot counts. The app keeps each ciphertext it cast, because the server only
   indexes a ballot once Aztec has proven its epoch and a revote has to build on the latest one.
-- **Masks**: anyone can add an unsigned all-zero ballot to a uniformly random registered slot, or to
-  their own. The circuit adds it to the slot's current ciphertext, so no choice changes, but on Aztec
+- **Staging passes**: before attesting a ciphertext the server checks a zero-knowledge *staging
+  pass*, made in the browser with the voter's own slot key: it proves the sender holds the key of some
+  registered slot, without saying which, and reveals a one-time tag, so each slot key can stage at most
+  `staging_max_requests` ciphertexts per poll (votes and masks together; the app keeps the counter in
+  `localStorage`). Outsiders cannot fill the server's storage.
+- **Masks**: any registered voter can add an unsigned all-zero ballot to a uniformly random registered
+  slot, or to their own. The circuit adds it to the slot's current ciphertext, so no choice changes, but on Aztec
   it is indistinguishable from a vote or a re-vote, which makes vote receipts unreliable.
 - **Results** are 1-2 hours slower than on Ethereum alone: after voting closes, the round's input root
   reaches Ethereum only once Aztec has proven the epoch (the program waits at least its
@@ -132,8 +139,7 @@ npm run dev             # http://localhost:5180
 npm run build
 ```
 
-`vendor/crisp-e3-sdk-0.28.1.tgz` is `@crisp-e3/sdk` from crisp-aztec with the `noir-recursive` fold
-target; `vendor/crisp-e3-aztec-0.28.1.tgz` is `@crisp-e3/aztec` with the CRISP Aztec contract's
+`vendor/crisp-e3-sdk-0.28.1.tgz` is `@crisp-e3/sdk` from crisp-aztec (with the base-proof API `cast` uses); `vendor/crisp-e3-aztec-0.28.1.tgz` is `@crisp-e3/aztec` with the CRISP Aztec contract's
 artifact. Rebuild them with `pnpm pack` in `packages/crisp-sdk` and `extensions/aztec/sdk` of
 crisp-aztec (the Aztec SDK carries `nationalityCommitment`, the registrar calldata builder and the
 relay client the app uses). `package.json` overrides `@crisp-e3/sdk` so the Aztec SDK uses the vendored one.
@@ -174,7 +180,7 @@ Creating a poll costs the Interfold fee in Sepolia MockUSDC (about 22 USDC for a
 the Minimum committee); the create page links the testnet faucet. A poll's voting window must open
 after the committee's key setup (about 40 minutes) and last at least an hour.
 
-Voting is real in-browser proving (Aztec private kernel proofs, then the ballot's fold proof): expect a
+Voting is real in-browser proving (Aztec private kernel proofs, then the ballot's three base proofs): expect a
 minute or more per transaction, and keep the tab open. So is registering on Aztec; registering on
 Ethereum proves only on the phone, then waits a few minutes for the keeper.
 
@@ -195,8 +201,8 @@ Ethereum proves only on the phone, then waits a few minutes for the keeper.
 
 | App | `CrispSignalAztec` | Aztec CRISP contract |
 |---|---|---|
-| https://poll.theinterfold.com | [`0xBEDF93604Bad4c545FFBf79971fD29f73F2bc641`](https://sepolia.etherscan.io/address/0xBEDF93604Bad4c545FFBf79971fD29f73F2bc641) | `0x1b727fd4de17bbf7d439aea713ceb0591fcb97291fe9b120a20ee17b4043b59d` (Aztec testnet) |
+| https://poll.theinterfold.com | [`0xeAdBFF032144F6a76C354917d3fFae9958A89DD5`](https://sepolia.etherscan.io/address/0xeAdBFF032144F6a76C354917d3fFae9958A89DD5) | `0x2261e8729a382ccbd5adc6f88cbd3ee9bb9c3e3871904a74b77eb7a4400c5a22` (Aztec testnet) |
 
-The board's CRISP program is [`0xF2F8047C478FAE4a0b9cf8B500211315fDfdd7F1`](https://sepolia.etherscan.io/address/0xF2F8047C478FAE4a0b9cf8B500211315fDfdd7F1) and its
+The board's CRISP program is [`0xa67B6cDa41f75F3081162D2F50C2b663Ebe3b1F4`](https://sepolia.etherscan.io/address/0xa67B6cDa41f75F3081162D2F50C2b663Ebe3b1F4) and its
 `ZKPassportRegistrar` (domain `poll.theinterfold.com`, proofs valid seven days) is
-[`0x10744Ca11f6c90D106e9Aa73a0D421Fa88B4cF17`](https://sepolia.etherscan.io/address/0x10744Ca11f6c90D106e9Aa73a0D421Fa88B4cF17).
+[`0x2258E935662A259F1c5D58228ea6bA93F6870C03`](https://sepolia.etherscan.io/address/0x2258E935662A259F1c5D58228ea6bA93F6870C03).

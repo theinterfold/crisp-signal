@@ -1,7 +1,7 @@
 import {
   CrispSDK,
-  finishBallotProof,
-  finishMaskProof,
+  finishBallotBaseProofs,
+  finishMaskBaseProofs,
   getRoundBfvParams,
   getZeroVote,
   isCommitteeKeyAuthentic,
@@ -22,7 +22,7 @@ import { interfoldAbi } from './abi'
 import { getClient, invalidateLogs, l1Registration, loadDeployment, loadRound, loadSdk, loadServerConfig, slotKeys } from './aztec'
 import { publicClient } from './wagmi'
 
-export type VoteStep = 'connecting' | 'encrypting' | 'proving' | 'staging' | 'sending' | 'done'
+export type VoteStep = 'connecting' | 'encrypting' | 'proving' | 'pass' | 'staging' | 'sending' | 'done'
 
 export type VoteProgress = { step: VoteStep; detail?: string; proofStage?: ProofStage; proofIndex?: number; proofTotal?: number }
 
@@ -121,11 +121,32 @@ async function resolveHead(client: CrispAztec, e3Id: bigint, slot: Address): Pro
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Staging passes: each slot key may stage `staging_max_requests` ciphertexts a round (votes and masks together), each under a
+// counter the server accepts once, so the counter is kept here and consumed before staging: a refused or lost staging used its.
+// ---------------------------------------------------------------------------------------------------------------
+
+const stagingCounterKey = (e3Id: bigint) => `crisp-signal:staging-counter:v1:${e3Id}`
+
+const stagingCounter = {
+  next: (e3Id: bigint, maxRequests: number): number => {
+    const used = Number(localStorage.getItem(stagingCounterKey(e3Id)) ?? 0)
+    if (!Number.isInteger(used) || used < 0) throw new Error('The staging counter in this browser is corrupt.')
+    if (used >= maxRequests) {
+      throw new Error(`This slot has used all ${maxRequests} ballots and masks the CRISP server accepts from one voter in a poll.`)
+    }
+    localStorage.setItem(stagingCounterKey(e3Id), String(used + 1))
+    return used
+  },
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Casting
 // ---------------------------------------------------------------------------------------------------------------
 
-// Fold public inputs, in the order the Aztec contract reads them (`buildCast` of `@crisp-e3/aztec`).
-const PI = { PREV_COMMITMENT: 0, CENSUS_ROOT: 4, CT_COMMITMENT: 7, COMMITTEE_KEY: 8 } as const
+// Public inputs of the ballot (crisp) proof, in the order the circuit declares them (`buildCast` of `@crisp-e3/aztec`).
+const PI = { PREV_COMMITMENT: 0, CENSUS_ROOT: 4, CT_COMMITMENT: 7 } as const
+
+const toBigints = (fields: string[]): bigint[] => fields.map((field) => BigInt(field))
 
 /** A 64-byte `r ‖ s` signature carries no recovery id, so try both parities. */
 async function isSignedBy(digest: Hex, compact: Hex, signer: Address): Promise<boolean> {
@@ -144,10 +165,11 @@ type BuildCastArgs = {
   numOptions: number
   census: Census
   committeePublicKey: Uint8Array
-  committeeKeyCommitment: Hex
   availabilitySigner: Address
   program: Address
   head: SlotHead | undefined
+  /** The voter's OWN slot key signs the staging pass, for a vote and a mask alike (a mask names another slot, `slot`). */
+  staging: { signer: Hex; maxRequests: number; counter: number }
   /** Omit for a mask. */
   vote?: { option: number; signer: Hex }
   onProgress: (progress: VoteProgress) => void
@@ -158,7 +180,7 @@ type BuildCastArgs = {
  * {@link resolveHead}) instead of whatever the server has indexed so far.
  */
 async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
-  const { availabilityDigest, ballotDigest, inputId, stageInput } = await loadSdk()
+  const { availabilityDigest, ballotDigest, buildStagingPass, destroyStagingPassProver, inputId, stageInput } = await loadSdk()
   const { e3Id, slot, program } = args
   const l1ChainId = CHAIN.id
   const noun = args.vote ? 'ballot' : 'mask'
@@ -182,34 +204,52 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
   // The digest the contract checks: the voter signs it with the slot's key. A mask carries the same digest and no signature.
   const digest = ballotDigest({ l1ChainId, program, e3Id, slot, ciphertextCommitment: prepared.ctCommitment })
   const proving = `Proving the ${noun} is well-formed`
+  // No aggregation: the Aztec contract verifies the three base proofs (the two encryption proofs and the ballot proof) itself, so
+  // the proofs stay in this browser, as private arguments of `cast`.
   const options = {
-    verifierTarget: 'noir-recursive' as const,
     onProgress: ({ stage, index, total }: { stage: ProofStage; index: number; total: number }) =>
       args.onProgress({ step: 'proving', detail: proving, proofStage: stage, proofIndex: index, proofTotal: total }),
   }
   args.onProgress({ step: 'proving', detail: proving })
   const result = args.vote
-    ? await finishBallotProof(prepared, digest, await sign({ hash: digest, privateKey: args.vote.signer, to: 'hex' }), options)
-    : await finishMaskProof(prepared, digest, options)
-  if (!result.recursive) throw new Error('The fold proof carries no recursive artifacts')
+    ? await finishBallotBaseProofs(prepared, digest, await sign({ hash: digest, privateKey: args.vote.signer, to: 'hex' }), options)
+    : await finishMaskBaseProofs(prepared, digest, options)
 
-  const pi = result.publicInputs.map((value) => BigInt(value))
-  if (pi.length !== 9) throw new Error(`The fold proof has ${pi.length} public inputs, expected 9`)
-  if (pi[PI.CENSUS_ROOT] !== args.census.root) throw new Error('The proof was made against a different census root than the one rebuilt from the logs')
-  if (pi[PI.COMMITTEE_KEY] !== BigInt(args.committeeKeyCommitment)) {
-    throw new Error('The committee public key the server serves does not match the key the Aztec contract stored')
+  const pi = result.crisp.publicInputs.map((value) => BigInt(value))
+  if (pi.length !== 10) throw new Error(`The ballot proof has ${pi.length} public inputs, expected 10`)
+  if (result.ct0.publicInputs.length !== 4 || result.ct1.publicInputs.length !== 3) {
+    throw new Error('The encryption proofs have an unexpected number of public inputs')
   }
+  if (pi[PI.CENSUS_ROOT] !== args.census.root) throw new Error('The proof was made against a different census root than the one rebuilt from the logs')
   if (pi[PI.CT_COMMITMENT] !== BigInt(prepared.ctCommitment)) throw new Error('The proof commits to a different ciphertext than the one prepared')
 
-  args.onProgress({ step: 'staging', detail: `Staging the encrypted ${noun} with the CRISP server` })
   const encryptedVoteHash = keccak256(bytesToHex(result.encryptedVote))
-  const attestation: InputAttestation = await stageInput(CRISP_SERVER_URL, {
+  const staged = {
     e3Id,
     slot,
     ciphertext: result.encryptedVote,
     ciphertextCommitment: prepared.ctCommitment,
     parentIndexPlusOne: result.parentIndexPlusOne,
-  })
+  }
+  // The pass proves, without saying which, that the sender holds the key of SOME registered slot, so the server's storage cannot be
+  // filled by outsiders; its tag limits each slot key to `maxRequests` stagings a round, votes and masks alike.
+  args.onProgress({ step: 'pass', detail: `Proving you hold a registered slot, without saying which (a staging pass for the ${noun})` })
+  let stagingPass
+  try {
+    stagingPass = await buildStagingPass({
+      signer: (hash) => sign({ hash, privateKey: args.staging.signer, to: 'hex' }),
+      census: args.census,
+      credits: args.credits,
+      request: { l1ChainId, program, ...staged },
+      maxRequests: args.staging.maxRequests,
+      counter: args.staging.counter,
+    })
+  } finally {
+    // Frees the pass prover's WASM instance and its SRS; a later pass makes a new one.
+    await destroyStagingPassProver()
+  }
+  args.onProgress({ step: 'staging', detail: `Staging the encrypted ${noun} with the CRISP server` })
+  const attestation: InputAttestation = await stageInput(CRISP_SERVER_URL, { ...staged, stagingPass })
 
   const id = inputId({
     program,
@@ -229,8 +269,14 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
 
   return {
     e3Id,
-    vk: result.recursive.vkFields.map((field) => BigInt(field)),
-    proof: result.recursive.proofFields.map((field) => BigInt(field)),
+    ct0Vk: toBigints(result.ct0.vkFields),
+    ct0Proof: toBigints(result.ct0.proofFields),
+    ct0PublicInputs: toBigints(result.ct0.publicInputs),
+    ct1Vk: toBigints(result.ct1.vkFields),
+    ct1Proof: toBigints(result.ct1.proofFields),
+    ct1PublicInputs: toBigints(result.ct1.publicInputs),
+    crispVk: toBigints(result.crisp.vkFields),
+    crispProof: toBigints(result.crisp.proofFields),
     slot,
     ctCommitment: prepared.ctCommitment,
     encryptedVoteHash,
@@ -271,10 +317,11 @@ type SubmitBallotArgs = {
 export async function submitBallot({ e3Id, slot, numOptions, ballot, onProgress }: SubmitBallotArgs): Promise<string> {
   const noun = ballot.kind === 'vote' ? 'ballot' : 'mask'
   onProgress({ step: 'connecting', detail: 'Connecting to Aztec' })
-  const signer = ballot.kind === 'vote' ? slotKeys.get(e3Id) : undefined
-  if (ballot.kind === 'vote') {
-    if (!signer) throw new Error("This browser does not hold the key of your slot for this poll, so it cannot sign a ballot for it.")
-    if (slotKeys.address(signer).toLowerCase() !== slot.toLowerCase()) throw new Error('The slot does not belong to the key this browser holds.')
+  // Votes and masks alike are staged with this browser's own slot key, so only registered voters can add either.
+  const ownKey = slotKeys.get(e3Id)
+  if (!ownKey) throw new Error(`This browser does not hold the key of a slot registered for this poll, so it cannot ${noun === 'ballot' ? 'sign a ballot' : 'add a mask'}.`)
+  if (ballot.kind === 'vote' && slotKeys.address(ownKey).toLowerCase() !== slot.toLowerCase()) {
+    throw new Error('The slot does not belong to the key this browser holds.')
   }
 
   const [client, deployment, server, e3] = await Promise.all([
@@ -291,6 +338,8 @@ export async function submitBallot({ e3Id, slot, numOptions, ballot, onProgress 
     throw new Error("The committee key on Aztec is not the one Interfold published for this poll.")
   }
   if (!(await client.isSlotRegistered(e3Id, slot))) throw new Error('That slot is not registered for this poll.')
+  if (!(await client.isSlotRegistered(e3Id, slotKeys.address(ownKey)))) throw new Error('This browser\'s slot is not registered for this poll yet.')
+  const counter = stagingCounter.next(e3Id, server.staging_max_requests)
 
   onProgress({ step: 'encrypting', detail: 'Fetching the committee key, the census and the circuits' })
   const [census, committeePublicKey] = await Promise.all([
@@ -307,11 +356,11 @@ export async function submitBallot({ e3Id, slot, numOptions, ballot, onProgress 
     numOptions,
     census,
     committeePublicKey,
-    committeeKeyCommitment,
     availabilitySigner: server.signer,
     program: deployment.program,
     head,
-    vote: ballot.kind === 'vote' ? { option: ballot.option, signer: signer! } : undefined,
+    staging: { signer: ownKey, maxRequests: server.staging_max_requests, counter },
+    vote: ballot.kind === 'vote' ? { option: ballot.option, signer: ownKey } : undefined,
     onProgress,
   })
 
