@@ -53,7 +53,7 @@ export function CountryPicker({ value, onChange }: { value: string[]; onChange: 
         aria-label="Search countries"
       />
       <div className="country-list">
-        {matches.slice(0, 60).map((c) => (
+        {matches.map((c) => (
           <button type="button" key={c.code} onClick={() => add([c.code])}>
             <span>{c.name}</span>
             <span className="mono">{c.code}</span>
