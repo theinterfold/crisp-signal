@@ -5,11 +5,12 @@ import { useAccount, useWriteContract } from 'wagmi'
 import { ArrowLeft } from '@phosphor-icons/react'
 import { BOARD_ADDRESS, CHAIN } from '../config'
 import { crispSignalAztecAbi } from '../lib/abi'
-import { eligibilityChips, errorMessage, formatDate, shortAddress, shortHex, timing } from '../lib/format'
+import { countryNames, eligibilityChips, errorMessage, formatDate, shortAddress, shortHex, timing } from '../lib/format'
 import { fetchMetadata } from '../lib/ipfs'
-import { phaseOf, usePoll, type Phase, type Poll } from '../lib/polls'
+import { isL1Registration, NationalityMode, phaseOf, usePoll, useRulesCheck, type Phase, type Poll } from '../lib/polls'
 import { publicClient } from '../lib/wagmi'
 import { Notice, PhaseBadge, Results } from '../components/PollBits'
+import { ConnectButton } from '../components/ConnectButton'
 import { VotePanel } from '../components/VotePanel'
 import { useDeployment } from '../lib/aztec'
 
@@ -28,7 +29,6 @@ export function PollPage() {
     enabled: Boolean(poll.data),
     staleTime: Infinity,
   })
-  const { address } = useAccount()
 
   if (id === undefined) return <Notice tone="error">That is not a poll id.</Notice>
   if (poll.error) return <Notice tone="error">Could not load poll #{id.toString()}: {errorMessage(poll.error)}</Notice>
@@ -96,7 +96,7 @@ export function PollPage() {
             </div>
             <VotePanel key={p.e3Id.toString()} poll={p} phase={phase} options={options} title={title} />
           </section>
-          {phase === 'failed' && address?.toLowerCase() === p.creator.toLowerCase() && <Refund poll={p} />}
+          {phase === 'failed' && <CreatorRefund poll={p} />}
         </aside>
       </div>
     </>
@@ -122,17 +122,33 @@ function resultsPending(phase: Phase, poll: Poll) {
 }
 
 function Eligibility({ poll }: { poll: Poll }) {
+  const { rules } = poll
+  const check = useRulesCheck(poll)
+  const l1 = isL1Registration(rules)
   return (
     <section className="card">
       <h2 style={{ marginBottom: 14 }}>Who can vote</h2>
       <div className="chips" style={{ marginBottom: 14 }}>
-        {eligibilityChips(poll).map((chip) => (
+        {eligibilityChips(rules).map((chip) => (
           <span className="chip" key={chip}>
             {chip}
           </span>
         ))}
       </div>
-      {poll.allowMockDocuments && (
+      {/* The chip names up to three countries; longer lists are written out. */}
+      {rules.nationalityMode !== NationalityMode.None && rules.countries.length > 3 && (
+        <p className="muted small" style={{ marginBottom: 14 }}>
+          {rules.nationalityMode === NationalityMode.In ? 'Only nationals of' : 'Nationals of the following cannot vote:'}{' '}
+          {countryNames(rules.countries).join(', ')}.
+        </p>
+      )}
+      <p className="muted small" style={{ marginBottom: 14 }}>
+        {l1
+          ? 'Voters register with ZKPassport on Ethereum: the CRISP server submits their proof, so no wallet is needed, and a keeper carries the registration to Aztec, where the ballots are cast.'
+          : 'Voters register with ZKPassport on Aztec, from their browser, and cast their ballots there.'}
+      </p>
+      {check.data && !check.data.ok && <Notice tone="error">{check.data.reason} Do not register for this poll.</Notice>}
+      {rules.allowMockDocuments && (
         <Notice tone="warning">This poll accepts ZKPassport mock IDs, which anyone can create. Use it for testing only.</Notice>
       )}
     </section>
@@ -151,6 +167,8 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
         <dd>{formatDate(poll.closesAt)}</dd>
         <dt>Options</dt>
         <dd>{poll.numOptions}</dd>
+        <dt>Registration</dt>
+        <dd>{isL1Registration(poll.rules) ? 'on Ethereum, relayed to Aztec' : 'on Aztec'}</dd>
         <dt>Aztec round</dt>
         <dd>{aztecRound(poll)}</dd>
         <dt>Registered voters</dt>
@@ -202,6 +220,20 @@ function aztecRound(poll: Poll) {
   if (poll.aztec.keyPublished) return 'open for ballots'
   if (poll.aztec.opened) return 'waiting for the committee key'
   return 'not opened yet'
+}
+
+/** Only the poll's creator (a wallet user) can claim the refund of a failed round; voters never touch the wallet. */
+function CreatorRefund({ poll }: { poll: Poll }) {
+  const { address } = useAccount()
+  if (address?.toLowerCase() === poll.creator.toLowerCase()) return <Refund poll={poll} />
+  if (address) return null
+  return (
+    <section className="card stack">
+      <h3>Refund</h3>
+      <p className="muted small">The round failed. The creator of this poll can connect the wallet they created it with to claim the fee refund.</p>
+      <ConnectButton />
+    </section>
+  )
 }
 
 function Refund({ poll }: { poll: Poll }) {

@@ -4,7 +4,7 @@ import type { Address } from 'viem'
 import { CheckCircle } from '@phosphor-icons/react'
 import { exportSecrets, slotKeys } from '../lib/aztec'
 import { errorMessage, formatDate, OPTION_COLORS } from '../lib/format'
-import type { Phase, Poll } from '../lib/polls'
+import { isL1Registration, type Phase, type Poll } from '../lib/polls'
 import { inputReceipt, randomRegistrant, submitBallot, type BallotKind, type InputKind, type VoteProgress, type VoteStep } from '../lib/vote'
 import { PassportStep } from './PassportStep'
 import { Notice } from './PollBits'
@@ -173,8 +173,11 @@ export function VotePanel({ poll, phase, options, title }: { poll: Poll; phase: 
             <>
               <p className="muted small" style={{ marginBottom: 12 }}>
                 Scan with the ZKPassport app and tap your passport or ID card on your phone. The proof reveals only that
-                you meet the rules and that this document has not registered for this poll before. It is bound to an
-                Aztec account this browser creates for you; no Ethereum wallet is needed.
+                you meet the rules and that this document has not registered for this poll before.{' '}
+                {isL1Registration(poll.rules)
+                  ? 'It is bound to a key this browser creates for this poll, and the CRISP server submits it to Ethereum for you.'
+                  : 'It is bound to an Aztec account this browser creates for you.'}{' '}
+                No Ethereum wallet is needed.
               </p>
               <PassportStep poll={poll} title={title} onRegistered={() => refresh((n) => n + 1)} />
             </>

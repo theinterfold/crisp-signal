@@ -157,6 +157,22 @@ export const slotKeys = {
   address: (key: Hex): Address => privateKeyToAddress(key),
 }
 
+const l1RegistrationKey = (e3Id: bigint) => `crisp-signal:l1-registration:v1:${e3Id}`
+
+/**
+ * The Ethereum transaction that registered this browser's slot on an L1-path poll, kept until the slot shows up in the Aztec census
+ * (the keeper adds it a few minutes later), so a reload resumes the wait instead of asking the voter to verify again, which the
+ * registrar would refuse: a document registers once.
+ */
+export const l1Registration = {
+  get: (e3Id: bigint): Hex | undefined => {
+    const stored = localStorage.getItem(l1RegistrationKey(e3Id))
+    return stored && /^0x[0-9a-fA-F]{64}$/.test(stored) ? (stored as Hex) : undefined
+  },
+  set: (e3Id: bigint, txHash: Hex) => localStorage.setItem(l1RegistrationKey(e3Id), txHash),
+  clear: (e3Id: bigint) => localStorage.removeItem(l1RegistrationKey(e3Id)),
+}
+
 /** Every secret this browser holds for the app, as JSON the voter can keep. */
 export function exportSecrets(): string {
   const slots: Record<string, string> = {}
@@ -260,6 +276,19 @@ export async function loadServerConfig() {
     throw new Error('The CRISP server is wired to a different Aztec contract than the CRISP program on Ethereum.')
   }
   return config
+}
+
+/**
+ * On an L1-path poll the CRISP server relays registrations to its configured registrar: refuse a server whose registrar is not the one
+ * the poll names, rather than have a voter's proof sent to a contract that will not register it.
+ */
+export async function assertServerRelaysTo(registrar: Address) {
+  const config = await loadServerConfig()
+  const relays = config.zkpassport_registrar
+  if (!relays) throw new Error(`The CRISP server at ${CRISP_SERVER_URL} does not relay ZKPassport registrations to Ethereum.`)
+  if (getAddress(relays) !== getAddress(registrar)) {
+    throw new Error(`The CRISP server relays registrations to ${relays}, but this poll's registrar is ${registrar}.`)
+  }
 }
 
 /** What the contract verifies registrations against: the ZKPassport circuits release and the proof validity window. */

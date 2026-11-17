@@ -58,7 +58,7 @@ function PollRow({ poll }: { poll: Poll }) {
         <h3>{metadata.data?.title ?? (metadata.error ? 'Metadata unavailable' : 'Loading…')}</h3>
         {metadata.data && <p className="desc">{metadata.data.description}</p>}
         <div className="chips" style={{ marginTop: 12 }}>
-          {eligibilityChips(poll).map((chip) => (
+          {eligibilityChips(poll.rules).map((chip) => (
             <span className="chip" key={chip}>
               {chip}
             </span>

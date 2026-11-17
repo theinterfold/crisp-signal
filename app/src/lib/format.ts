@@ -1,5 +1,6 @@
 import { BaseError, UserRejectedRequestError } from 'viem'
-import type { Phase, Poll } from './polls'
+import { COUNTRY_NAME } from './countries'
+import { NationalityMode, type Phase, type PollRules } from './polls'
 
 export const OPTION_COLORS = ['#3a5e3c', '#a84932', '#7a7d77', '#355a8a', '#8a6a40', '#5a4a8a', '#2f7a6a', '#9a7a30', '#4a6f7a', '#7a4a5e']
 
@@ -52,11 +53,22 @@ export function timing(phase: Phase, opensAt: number, closesAt: number, now = Da
   }
 }
 
+/** Country names for ICAO alpha-3 codes (the code itself when unknown). */
+export const countryNames = (codes: readonly string[]) => codes.map((c) => COUNTRY_NAME[c] ?? c)
+
+/** A short list of countries for a chip: the names up to three, then the count. */
+function countryLabel(codes: readonly string[]) {
+  const names = countryNames(codes)
+  return names.length <= 3 ? names.join(', ') : `${names.length} countries`
+}
+
 /** Human-readable eligibility rules, one per chip. */
-export function eligibilityChips(poll: Pick<Poll, 'minAge' | 'allowMockDocuments'>): string[] {
+export function eligibilityChips(rules: PollRules): string[] {
   const chips = ['One vote per document']
-  if (poll.minAge > 0) chips.push(`Age ${poll.minAge}+`)
-  if (poll.allowMockDocuments) chips.push('Mock IDs accepted')
+  if (rules.minAge > 0) chips.push(`Age ${rules.minAge}+`)
+  if (rules.nationalityMode === NationalityMode.In) chips.push(`Nationals of ${countryLabel(rules.countries)}`)
+  if (rules.nationalityMode === NationalityMode.Out) chips.push(`Excludes ${countryLabel(rules.countries)}`)
+  if (rules.allowMockDocuments) chips.push('Mock IDs accepted')
   return chips
 }
 

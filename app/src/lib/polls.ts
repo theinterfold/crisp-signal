@@ -1,9 +1,82 @@
 import { useQuery } from '@tanstack/react-query'
-import { decodeAbiParameters, type Address } from 'viem'
+import { decodeAbiParameters, zeroAddress, type Address } from 'viem'
 import { BOARD_ADDRESS, INTERFOLD_ADDRESS } from '../config'
 import { crispAztecProgramAbi, crispSignalAztecAbi, E3Stage, interfoldAbi } from './abi'
-import { loadRound } from './aztec'
+import { loadRound, loadSdk } from './aztec'
 import { publicClient } from './wagmi'
+
+/** ZKPassport nationality rule of a poll: any nationality, only the listed countries, or all but the listed countries. */
+export const NationalityMode = { None: 0, In: 1, Out: 2 } as const
+export type NationalityMode = (typeof NationalityMode)[keyof typeof NationalityMode]
+
+/**
+ * A poll's eligibility rules: the E3's custom parameters, which are what the CRISP program validated and announced in
+ * its `RoundRules` event, and what the Aztec contract (and, on the L1 path, the registrar) enforce.
+ */
+export type PollRules = {
+  /** Minimum age voters prove; 0 for none. */
+  minAge: number
+  /** ZKPassport mock documents are accepted (testing only). */
+  allowMockDocuments: boolean
+  /** Not the zero address: voters register on Ethereum through this `ZKPassportRegistrar`. Zero: they register on Aztec. */
+  registrar: Address
+  nationalityMode: NationalityMode
+  /** ICAO alpha-3 codes, in the order the rule was committed to. */
+  countries: string[]
+  /** Aztec path with a nationality rule: ZKPassport's commitment to `countries`, which the app recomputes. Otherwise 0. */
+  nationalityCommitment: bigint
+}
+
+/** `abi.encode(numOptions, credits, minAge, allowMockDocuments, registrar, nationalityMode, countries, nationalityCommitment)`. */
+export function decodeRules(customParams: `0x${string}`): { numOptions: number; rules: PollRules } {
+  const [numOptions, , minAge, allowMockDocuments, registrar, nationalityMode, countries, nationalityCommitment] = decodeAbiParameters(
+    [
+      { type: 'uint256' },
+      { type: 'uint256' },
+      { type: 'uint256' },
+      { type: 'bool' },
+      { type: 'address' },
+      { type: 'uint8' },
+      { type: 'string[]' },
+      { type: 'uint256' },
+    ],
+    customParams,
+  )
+  if (nationalityMode > NationalityMode.Out) throw new Error(`Unknown nationality mode ${nationalityMode}.`)
+  return {
+    numOptions: Number(numOptions),
+    rules: {
+      minAge: Number(minAge),
+      allowMockDocuments,
+      registrar,
+      nationalityMode: nationalityMode as NationalityMode,
+      countries: [...countries],
+      nationalityCommitment,
+    },
+  }
+}
+
+/** Registration happens on Ethereum (relayed by the CRISP server), not on Aztec. */
+export const isL1Registration = (rules: Pick<PollRules, 'registrar'>) => rules.registrar !== zeroAddress
+
+/**
+ * Whether a poll's nationality rule is what it says. On the L1 path the registrar checks the country list itself. On the Aztec path
+ * the contract verifies proofs against a ZKPassport commitment to the list, which Ethereum cannot recompute: a creator could name a
+ * list and commit to another. So the app recomputes the commitment from the announced list and refuses a poll that does not match.
+ * (A wrong commitment can only make the poll unregistrable, but the page should say so before a voter proves anything.)
+ */
+export async function checkRules(rules: PollRules): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (rules.nationalityMode === NationalityMode.None || isL1Registration(rules)) {
+    return rules.nationalityCommitment === 0n
+      ? { ok: true }
+      : { ok: false, reason: 'The poll carries a nationality commitment it does not use.' }
+  }
+  const { nationalityCommitment } = await loadSdk()
+  const expected = await nationalityCommitment(rules.nationalityMode, rules.countries)
+  return expected === rules.nationalityCommitment
+    ? { ok: true }
+    : { ok: false, reason: "The poll's nationality commitment does not match its country list, so ZKPassport proofs for this list cannot be registered." }
+}
 
 export type Phase = 'preparing' | 'scheduled' | 'open' | 'tallying' | 'decrypting' | 'final' | 'failed' | 'stalled'
 
@@ -34,10 +107,7 @@ export type Poll = {
   /** Unix seconds: Aztec refuses new ballots from here on. */
   closesAt: number
   numOptions: number
-  /** Minimum age voters prove; 0 for none. */
-  minAge: number
-  /** ZKPassport mock documents are accepted (testing only). */
-  allowMockDocuments: boolean
+  rules: PollRules
   /** The input root reached Ethereum (after the Aztec epoch proof): compute can start. */
   rootSubmitted: boolean
   aztec?: AztecStatus
@@ -79,10 +149,7 @@ async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
     publicClient.readContract({ address: INTERFOLD_ADDRESS, abi: interfoldAbi, functionName: 'getE3', args: [p.e3Id] }),
   ])
   const program = e3.e3Program
-  const [numOptions, , minAge, allowMockDocuments] = decodeAbiParameters(
-    [{ type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'bool' }],
-    e3.customParams,
-  )
+  const { numOptions, rules } = decodeRules(e3.customParams)
   const [round, tally, aztec] = await Promise.all([
     publicClient.readContract({ address: program, abi: crispAztecProgramAbi, functionName: 'getRound', args: [p.e3Id] }),
     stage === E3Stage.Complete
@@ -106,9 +173,8 @@ async function hydrateOne(id: bigint, p: BoardPoll): Promise<Poll> {
     stage,
     opensAt: Number(e3.inputWindow[0]),
     closesAt: Number(e3.inputWindow[1]),
-    numOptions: Number(numOptions),
-    minAge: Number(minAge),
-    allowMockDocuments,
+    numOptions,
+    rules,
     rootSubmitted: round.rootSubmitted,
     aztec,
     tally: tally ? [...tally] : undefined,
@@ -135,6 +201,10 @@ export async function loadPoll(id: bigint): Promise<Poll> {
   })
   return hydrateOne(id, poll)
 }
+
+/** The check of {@link checkRules}, once per poll; unavailable while the Aztec SDK cannot load. */
+export const useRulesCheck = (poll: Pick<Poll, 'e3Id' | 'rules'>) =>
+  useQuery({ queryKey: ['rules-check', poll.e3Id.toString()], queryFn: () => checkRules(poll.rules), staleTime: Infinity })
 
 export const usePolls = () => useQuery({ queryKey: ['polls'], queryFn: () => loadPolls(), refetchInterval: 30_000 })
 

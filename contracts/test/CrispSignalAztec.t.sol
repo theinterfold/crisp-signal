@@ -4,11 +4,12 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {CrispSignalAztec} from "../src/CrispSignalAztec.sol";
 import {IInterfold} from "../src/interfaces/IInterfold.sol";
-import {MockFeeToken, MockInterfold} from "./mocks/MockInterfold.sol";
+import {MockFeeToken, MockInterfold, MockRegistrar} from "./mocks/MockInterfold.sol";
 
 contract CrispSignalAztecTest is Test {
     MockInterfold internal interfold;
     MockFeeToken internal token;
+    MockRegistrar internal registrar;
     CrispSignalAztec internal board;
     address internal creator = makeAddr("creator");
 
@@ -16,7 +17,8 @@ contract CrispSignalAztecTest is Test {
         interfold = new MockInterfold();
         token = interfold.TOKEN();
         // The mock is both the coordinator and the program; any contract with `interfold()` returning it works.
-        board = new CrispSignalAztec(IInterfold(address(interfold)), address(interfold));
+        registrar = new MockRegistrar(address(interfold));
+        board = new CrispSignalAztec(IInterfold(address(interfold)), address(interfold), address(registrar));
         token.mint(creator, 1_000e6);
     }
 
@@ -63,13 +65,72 @@ contract CrispSignalAztecTest is Test {
         assertEq(sent.inputWindow[0], block.timestamp + 3600);
         assertEq(sent.inputWindow[1], block.timestamp + 90_000);
 
-        // `CRISPRemoteProgram._roundConfig` decodes `(numOptions, credits, minAge, allowMockDocuments)`.
-        (uint256 numOptions, uint256 credits, uint256 minAge, bool allowMock) =
-            abi.decode(sent.customParams, (uint256, uint256, uint256, bool));
+        // `CRISPRemoteProgram._roundConfig` decodes this tuple; an Aztec-path poll names no registrar.
+        (
+            uint256 numOptions,
+            uint256 credits,
+            uint256 minAge,
+            bool allowMock,
+            address reg,
+            uint8 mode,
+            string[] memory countries,
+            uint256 commitment
+        ) = abi.decode(
+            sent.customParams, (uint256, uint256, uint256, bool, address, uint8, string[], uint256)
+        );
         assertEq(numOptions, 3);
         assertEq(credits, 1);
         assertEq(minAge, 18);
         assertTrue(allowMock);
+        assertEq(reg, address(0));
+        assertEq(mode, 0);
+        assertEq(countries.length, 0);
+        assertEq(commitment, 0);
+    }
+
+    function test_createPoll_l1PathNamesTheBoardsRegistrarAndPassesTheNationalityRule() public {
+        CrispSignalAztec.PollRequest memory r = _request(type(uint256).max);
+        r.l1Registration = true;
+        r.nationalityMode = 2;
+        r.countries = new string[](2);
+        r.countries[0] = "DEU";
+        r.countries[1] = "FRA";
+        vm.startPrank(creator);
+        token.approve(address(board), type(uint256).max);
+        board.createPoll(r);
+        vm.stopPrank();
+
+        (,,,, address reg, uint8 mode, string[] memory countries, uint256 commitment) = abi.decode(
+            interfold.last().customParams,
+            (uint256, uint256, uint256, bool, address, uint8, string[], uint256)
+        );
+        assertEq(reg, address(registrar));
+        assertEq(mode, 2);
+        assertEq(countries.length, 2);
+        assertEq(countries[0], "DEU");
+        assertEq(countries[1], "FRA");
+        assertEq(commitment, 0);
+    }
+
+    function test_createPoll_aztecPathPassesTheNationalityCommitment() public {
+        CrispSignalAztec.PollRequest memory r = _request(type(uint256).max);
+        r.nationalityMode = 1;
+        r.countries = new string[](1);
+        r.countries[0] = "ZKR";
+        r.nationalityCommitment = 12345;
+        vm.startPrank(creator);
+        token.approve(address(board), type(uint256).max);
+        board.createPoll(r);
+        vm.stopPrank();
+
+        (,,,, address reg, uint8 mode, string[] memory countries, uint256 commitment) = abi.decode(
+            interfold.last().customParams,
+            (uint256, uint256, uint256, bool, address, uint8, string[], uint256)
+        );
+        assertEq(reg, address(0));
+        assertEq(mode, 1);
+        assertEq(countries[0], "ZKR");
+        assertEq(commitment, 12345);
     }
 
     function test_createPoll_refusesAFeeAboveTheCreatorsCap() public {
@@ -95,17 +156,28 @@ contract CrispSignalAztecTest is Test {
     }
 
     function test_constructor_refusesAProgramOfAnotherInterfold() public {
+        IInterfold i = IInterfold(address(interfold));
+        address reg = address(registrar);
         // A contract that is no program (no `interfold()`).
         vm.expectRevert();
-        new CrispSignalAztec(IInterfold(address(interfold)), address(token));
+        new CrispSignalAztec(i, address(token), reg);
         vm.expectRevert(CrispSignalAztec.InvalidConfiguration.selector);
-        new CrispSignalAztec(IInterfold(address(interfold)), makeAddr("eoa"));
+        new CrispSignalAztec(i, makeAddr("eoa"), reg);
         // A program bound to another Interfold.
         MockInterfold other = new MockInterfold();
         vm.expectRevert(CrispSignalAztec.InvalidConfiguration.selector);
-        new CrispSignalAztec(IInterfold(address(interfold)), address(other));
+        new CrispSignalAztec(i, address(other), reg);
         vm.expectRevert(CrispSignalAztec.InvalidConfiguration.selector);
-        new CrispSignalAztec(IInterfold(makeAddr("eoa")), address(interfold));
+        new CrispSignalAztec(IInterfold(makeAddr("eoa")), address(interfold), reg);
+    }
+
+    function test_constructor_refusesARegistrarOfAnotherProgram() public {
+        IInterfold i = IInterfold(address(interfold));
+        vm.expectRevert(CrispSignalAztec.InvalidConfiguration.selector);
+        new CrispSignalAztec(i, address(interfold), makeAddr("eoa"));
+        MockRegistrar foreign = new MockRegistrar(makeAddr("another program"));
+        vm.expectRevert(CrispSignalAztec.InvalidConfiguration.selector);
+        new CrispSignalAztec(i, address(interfold), address(foreign));
     }
 
     function test_getPolls_pagesNewestFirst() public {

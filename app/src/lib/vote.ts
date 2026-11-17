@@ -14,12 +14,12 @@ import {
   type ProofStage,
   type SlotHead,
 } from '@crisp-e3/sdk'
-import type { CastArguments, Census, CompressedProofResult, CrispAztec, InputAttestation } from '@crisp-e3/aztec'
+import type { CastArguments, Census, CompressedProofResult, CrispAztec, InputAttestation, ZKPassportProofParams } from '@crisp-e3/aztec'
 import { bytesToHex, hexToBytes, keccak256, recoverAddress, type Address, type Hex } from 'viem'
 import { sign } from 'viem/accounts'
 import { CHAIN, CRISP_SERVER_URL, INTERFOLD_ADDRESS, RPC_URL } from '../config'
 import { interfoldAbi } from './abi'
-import { getClient, loadDeployment, loadServerConfig, loadSdk, slotKeys, invalidateLogs } from './aztec'
+import { getClient, invalidateLogs, l1Registration, loadDeployment, loadRound, loadSdk, loadServerConfig, slotKeys } from './aztec'
 import { publicClient } from './wagmi'
 
 export type VoteStep = 'connecting' | 'encrypting' | 'proving' | 'staging' | 'sending' | 'done'
@@ -352,6 +352,78 @@ export async function registerSlot(args: { e3Id: bigint; proof: CompressedProofR
   const sent = await client.register({ e3Id: args.e3Id, slot, proof: args.proof })
   invalidateLogs()
   return { slot, txHash: sent.txHash }
+}
+
+/**
+ * Registers this browser's slot on an L1-path poll: sends the ZKPassport `compressed-evm` proof, as `ZKPassportRegistrar.register`
+ * calldata, to the CRISP server, which simulates it and submits it from its own Ethereum account, so the voter needs no wallet and
+ * no gas. The proof binds the slot and the chain, so the server (or anyone) cannot redirect it. The registration is then on
+ * Ethereum; {@link awaitL1Registration} follows it to the Aztec census.
+ */
+export async function registerSlotOnL1(args: {
+  e3Id: bigint
+  countries: string[]
+  params: ZKPassportProofParams
+}): Promise<{ slot: Address; txHash: Hex }> {
+  const { registerOnL1Calldata, relayRegistrationOnL1 } = await loadSdk()
+  const slot = slotKeys.address(slotKeys.getOrCreate(args.e3Id))
+  const calldata = registerOnL1Calldata({ e3Id: args.e3Id, slot, params: args.params, countries: args.countries })
+  const { txHash } = await relayRegistrationOnL1(CRISP_SERVER_URL, calldata)
+  l1Registration.set(args.e3Id, txHash)
+  return { slot, txHash }
+}
+
+export type L1RegistrationStep = 'confirming' | 'aztec'
+
+const AZTEC_POLL_MS = 15_000
+
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason)
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * Follows an L1 registration: waits for the Ethereum transaction, then for the keeper to relay the slot's Inbox message into the
+ * Aztec census (`MemberRegistered` in the contract's public logs), which is when the slot can vote.
+ */
+export async function awaitL1Registration(args: {
+  e3Id: bigint
+  slot: Address
+  txHash: Hex
+  onStep: (step: L1RegistrationStep) => void
+  signal: AbortSignal
+}): Promise<void> {
+  const { e3Id, slot, txHash, onStep, signal } = args
+  onStep('confirming')
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })
+  if (receipt.status !== 'success') {
+    l1Registration.clear(e3Id)
+    throw new Error('The registration transaction reverted on Ethereum.')
+  }
+
+  onStep('aztec')
+  for (;;) {
+    invalidateLogs()
+    const round = await loadRound(e3Id).catch((error: unknown) => {
+      console.warn('Could not read the census from Aztec', error)
+      return undefined
+    })
+    if (round?.members.some((member) => member.toLowerCase() === slot.toLowerCase())) {
+      l1Registration.clear(e3Id)
+      return
+    }
+    await sleep(AZTEC_POLL_MS, signal)
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

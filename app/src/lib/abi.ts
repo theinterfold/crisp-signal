@@ -33,6 +33,13 @@ export const crispAztecProgramAbi = parseAbi([
   'function getRound(uint256 e3Id) view returns (Round)',
 ])
 
+/** The part of `ZKPassportRegistrar` (L1 registration path) the app reads. */
+export const zkPassportRegistrarAbi = parseAbi([
+  'function program() view returns (address)',
+  'function domain() view returns (string)',
+  'function validityPeriod() view returns (uint256)',
+])
+
 export const erc20Abi = parseAbi([
   'function balanceOf(address) view returns (uint256)',
   'function allowance(address owner, address spender) view returns (uint256)',

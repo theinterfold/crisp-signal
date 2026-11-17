@@ -5,8 +5,9 @@ import {Script, console} from "forge-std/Script.sol";
 import {CrispSignalAztec} from "../src/CrispSignalAztec.sol";
 import {IInterfold} from "../src/interfaces/IInterfold.sol";
 
-/// @notice Deploys the poll board against the Sepolia Interfold and the `CRISPAztecProgram` named by
-///         `CRISP_AZTEC_PROGRAM`.
+/// @notice Deploys the poll board against the Sepolia Interfold, the `CRISPAztecProgram` named by
+///         `CRISP_AZTEC_PROGRAM` and that program's `ZKPassportRegistrar` named by `ZKPASSPORT_REGISTRAR`
+///         (the registrar of the polls that register voters on Ethereum).
 ///      forge script script/Deploy.s.sol --rpc-url sepolia --broadcast --skip-simulation --private-key $PRIVATE_KEY
 contract Deploy is Script {
     /// @dev The running Sepolia deployment (`@interfold/contracts` 0.20.0-dev.3).
@@ -14,9 +15,10 @@ contract Deploy is Script {
 
     function run() external returns (CrispSignalAztec board) {
         address program = vm.envAddress("CRISP_AZTEC_PROGRAM");
+        address registrar = vm.envAddress("ZKPASSPORT_REGISTRAR");
 
         vm.startBroadcast();
-        board = new CrispSignalAztec(INTERFOLD, program);
+        board = new CrispSignalAztec(INTERFOLD, program, registrar);
         vm.stopBroadcast();
 
         console.log("CrispSignalAztec:", address(board));

@@ -13,6 +13,11 @@ export const crispSignalAztecAbi = [
         "name": "crispProgram",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "registrar",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -39,6 +44,19 @@ export const crispSignalAztecAbi = [
         "name": "",
         "type": "address",
         "internalType": "contract IInterfold"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "REGISTRAR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -115,6 +133,26 @@ export const crispSignalAztecAbi = [
             "name": "allowMockDocuments",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "l1Registration",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "nationalityMode",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "countries",
+            "type": "string[]",
+            "internalType": "string[]"
+          },
+          {
+            "name": "nationalityCommitment",
+            "type": "uint256",
+            "internalType": "uint256"
           },
           {
             "name": "maxFee",

@@ -1,9 +1,11 @@
-import { NavLink, Link, Outlet } from 'react-router-dom'
+import { NavLink, Link, Outlet, useLocation } from 'react-router-dom'
 import logo from '../assets/crisp-logo.svg?raw'
 import { BOARD_ADDRESS, CHAIN } from '../config'
 import { ConnectButton } from './ConnectButton'
 
 export function Layout() {
+  // Only creating a poll (or claiming a failed poll's refund) uses a wallet: voters register and vote without one.
+  const creating = useLocation().pathname === '/create'
   return (
     <>
       <header className="header">
@@ -19,7 +21,7 @@ export function Layout() {
             <NavLink to="/create">Create poll</NavLink>
             <NavLink to="/about">How it works</NavLink>
           </nav>
-          <ConnectButton />
+          {creating && <ConnectButton />}
         </div>
       </header>
       <main>

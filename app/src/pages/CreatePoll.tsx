@@ -5,12 +5,15 @@ import { useAccount, useReadContracts, useWriteContract } from 'wagmi'
 import { formatUnits, parseEventLogs, stringToHex, zeroAddress, type Address } from 'viem'
 import { Plus, Trash } from '@phosphor-icons/react'
 import { BOARD_ADDRESS, CHAIN, COMPUTE_PROVIDER_PARAMS, CRYPTO_CONFIG_ID, FAUCET_ADDRESS, INTERFOLD_ADDRESS, PARAM_SET } from '../config'
+import { CountryPicker, MAX_COUNTRIES } from '../components/CountryPicker'
 import { Notice } from '../components/PollBits'
 import { ciphernodeRegistryAbi, crispAztecProgramAbi, crispSignalAztecAbi, erc20Abi, faucetAbi, interfoldAbi } from '../lib/abi'
 import { errorMessage, formatDuration, OPTION_COLORS } from '../lib/format'
 import { DurationInput } from '../components/DurationInput'
+import { loadSdk } from '../lib/aztec'
 import { uploadMetadata } from '../lib/ipfs'
 import { MAX_OPTIONS, type PollMetadata } from '../lib/metadata'
+import { NationalityMode } from '../lib/polls'
 import { publicClient } from '../lib/wagmi'
 
 const MINUTE = 60
@@ -21,6 +24,26 @@ const MIN_DURATION = 5 * MINUTE
 const RESULT_DELAY = '1–2 hours'
 /** Time between filling in the form and the transaction landing, kept free under the network's cap. */
 const SUBMIT_SLACK = 10 * MINUTE
+/** `CRISPRemoteProgram` caps the age rule here. */
+const MAX_AGE = 99
+/** Mock ZKPassport documents carry this nationality. */
+const MOCK_NATIONALITY = 'ZKR'
+type Registration = 'l1' | 'aztec'
+const REGISTRATIONS: { value: Registration; title: string; badge: string; body: string }[] = [
+  {
+    value: 'l1',
+    title: 'On Ethereum',
+    badge: 'Works with the ZKPassport app today',
+    body: 'Voters scan with the ZKPassport app; the CRISP server submits their proof to a ZKPassport verifier on Ethereum, and a keeper carries each registration to Aztec, a few minutes later. Ballots are still cast on Aztec.',
+  },
+  {
+    value: 'aztec',
+    title: 'On Aztec',
+    badge: 'Needs a bb-6 ZKPassport app',
+    body: "Voters' browsers prove their registration straight into the Aztec contract. Aztec 6 only verifies proofs made with the bb 6 prover, which today's ZKPassport app does not produce yet, so registration fails until it does.",
+  },
+]
+
 const COMMITTEES = [
   { value: 0, label: 'Minimum', hint: 'Smallest committee, lowest fee.' },
   { value: 1, label: 'Micro', hint: 'More ciphernodes must collude to decrypt early.' },
@@ -28,11 +51,12 @@ const COMMITTEES = [
 /** Covers the quote moving between the preview and the transaction (time passes, the window shrinks). */
 const FEE_SLACK_BPS = 200n
 
-type Step = 'idle' | 'uploading' | 'approving' | 'creating'
+type Step = 'idle' | 'uploading' | 'committing' | 'approving' | 'creating'
 
 const STEP_LABEL: Record<Step, string> = {
   idle: '',
   uploading: 'Publishing poll details to IPFS…',
+  committing: 'Computing the commitment to the country list…',
   approving: 'Approve the fee token in your wallet…',
   creating: 'Confirm the poll in your wallet…',
 }
@@ -130,7 +154,10 @@ export function CreatePollPage() {
   const [duration, setDuration] = useState(DAY)
   const [committeeSize, setCommitteeSize] = useState(0)
 
+  const [registration, setRegistration] = useState<Registration>('l1')
   const [minAge, setMinAge] = useState(18)
+  const [nationalityMode, setNationalityMode] = useState<NationalityMode>(NationalityMode.None)
+  const [countries, setCountries] = useState<string[]>([])
   const [allowMockDocuments, setAllowMockDocuments] = useState(true)
 
   const [step, setStep] = useState<Step>('idle')
@@ -162,10 +189,18 @@ export function CreatePollPage() {
   const amount = (v: bigint | undefined) => (v === undefined || decimals === undefined ? '…' : `${formatUnits(v, decimals)} ${symbol}`)
 
   const trimmedOptions = options.map((o) => o.trim())
+  // The list the poll commits to; none when anyone may vote.
+  const ruleCountries = nationalityMode === NationalityMode.None ? [] : countries
   const problems: string[] = []
   if (!title.trim()) problems.push('Give the poll a title.')
   if (trimmedOptions.some((o) => !o)) problems.push('Every option needs a label.')
   if (new Set(trimmedOptions).size !== trimmedOptions.length) problems.push('Options must be distinct.')
+  if (nationalityMode !== NationalityMode.None && countries.length === 0) {
+    problems.push('Pick at least one country, or allow any nationality.')
+  }
+  if (nationalityMode === NationalityMode.In && allowMockDocuments && !countries.includes(MOCK_NATIONALITY)) {
+    problems.push('Mock IDs carry the nationality ZKR: add "Zero Knowledge Republic" to the list, or turn off mock IDs.')
+  }
   if (setup && setup.computeWindow < setup.remoteFinalityWindow) {
     problems.push("The network gives computation less time than Aztec needs to deliver a poll's input root, so polls cannot be created.")
   }
@@ -217,6 +252,14 @@ export function CreatePollPage() {
         setMetadataCid({ cid, json })
       }
 
+      // The Aztec contract verifies proofs against ZKPassport's commitment to the country list, which Ethereum cannot compute: the
+      // creator supplies it, and voters' browsers recompute it from the list before they register. The Ethereum path checks the list itself.
+      let nationalityCommitment = 0n
+      if (registration === 'aztec' && nationalityMode !== NationalityMode.None) {
+        setStep('committing')
+        nationalityCommitment = await (await loadSdk()).nationalityCommitment(nationalityMode, ruleCountries)
+      }
+
       // Quote the exact window the transaction will request, then allow a little drift.
       const window = inputWindow(startDelay, duration)
       const current = await quote(setup, committeeSize, window)
@@ -245,6 +288,10 @@ export function CreatePollPage() {
         expectedCryptoConfigId: CRYPTO_CONFIG_ID[PARAM_SET],
         minAge: BigInt(minAge),
         allowMockDocuments,
+        l1Registration: registration === 'l1',
+        nationalityMode,
+        countries: ruleCountries,
+        nationalityCommitment,
         maxFee,
       } as const
       const { request: simulated } = await publicClient.simulateContract({
@@ -336,8 +383,8 @@ export function CreatePollPage() {
           <section className="card stack">
             <h2>Who can vote</h2>
             <p className="muted small">
-              Voters prove these facts about their passport or national ID with ZKPassport. The poll's Aztec contract checks
-              the proof and admits each document once; it never learns who the voter is. No Ethereum wallet is needed to vote.
+              Voters prove these facts about their passport or national ID with ZKPassport. The proof is checked on-chain and
+              admits each document once; it never reveals who the voter is. No Ethereum wallet is needed to vote.
             </p>
             <div className="field">
               <label htmlFor="age">Minimum age</label>
@@ -347,9 +394,9 @@ export function CreatePollPage() {
                   className="input"
                   type="number"
                   min={0}
-                  max={120}
+                  max={MAX_AGE}
                   value={minAge}
-                  onChange={(e) => setMinAge(Math.max(0, Math.min(120, Number(e.target.value) || 0)))}
+                  onChange={(e) => setMinAge(Math.max(0, Math.min(MAX_AGE, Number(e.target.value) || 0)))}
                   style={{ maxWidth: 120 }}
                 />
                 <span className="hint" style={{ alignSelf: 'center' }}>
@@ -357,15 +404,61 @@ export function CreatePollPage() {
                 </span>
               </div>
             </div>
+            <div className="field">
+              <span className="label">Nationality</span>
+              <div className="segmented" role="tablist">
+                {(
+                  [
+                    [NationalityMode.None, 'Any'],
+                    [NationalityMode.In, 'Only these'],
+                    [NationalityMode.Out, 'All except'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button type="button" key={value} className={nationalityMode === value ? 'active' : ''} onClick={() => setNationalityMode(value)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {nationalityMode !== NationalityMode.None && (
+                <>
+                  <span className="hint">
+                    {nationalityMode === NationalityMode.In
+                      ? 'Only nationals of the selected countries can vote.'
+                      : 'Nationals of the selected countries cannot vote.'}{' '}
+                    Up to {MAX_COUNTRIES} countries.
+                  </span>
+                  <CountryPicker value={countries} onChange={setCountries} />
+                </>
+              )}
+            </div>
             <label className="toggle">
               <input type="checkbox" checked={allowMockDocuments} onChange={(e) => setAllowMockDocuments(e.target.checked)} />
               <span>
                 <strong>Accept ZKPassport mock IDs</strong>
                 <span className="hint">
-                  For demos and testing only: anyone can generate mock documents. Mock IDs are 18+.
+                  For demos and testing only: anyone can generate mock documents. Mock IDs are 18+ and of nationality ZKR.
                 </span>
               </span>
             </label>
+          </section>
+
+          <section className="card stack">
+            <h2>How voters register</h2>
+            <p className="muted small">
+              Each poll registers its voters one way, never both, so a document can only ever register once. Ballots are cast on
+              Aztec either way.
+            </p>
+            {REGISTRATIONS.map((r) => (
+              <label className="toggle" key={r.value}>
+                <input type="radio" name="registration" checked={registration === r.value} onChange={() => setRegistration(r.value)} />
+                <span>
+                  <strong>
+                    {r.title} <span className="chip">{r.badge}</span>
+                  </strong>
+                  <span className="hint">{r.body}</span>
+                </span>
+              </label>
+            ))}
           </section>
         </div>
 

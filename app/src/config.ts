@@ -15,6 +15,8 @@ function address(name: string, value: string | undefined): Address {
 const env = import.meta.env
 
 export const CHAIN = sepolia
+/** ZKPassport's name for the chain an L1-path proof is bound to. */
+export const ZKPASSPORT_CHAIN = 'ethereum_sepolia' as const
 
 export const RPC_URL: string = env.VITE_SEPOLIA_RPC_URL || 'https://ethereum-sepolia.publicnode.com'
 /** The CRISP server running in Aztec mode (`PROGRAM_KIND=aztec`): it stages ciphertexts and attests availability. */
