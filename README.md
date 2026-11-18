@@ -220,8 +220,9 @@ Ethereum proves only on the phone, then waits a few minutes for the keeper.
 
 | App | `CrispSignalAztec` | Aztec CRISP contract |
 |---|---|---|
-| https://poll.theinterfold.com | [`0xeAdBFF032144F6a76C354917d3fFae9958A89DD5`](https://sepolia.etherscan.io/address/0xeAdBFF032144F6a76C354917d3fFae9958A89DD5) | `0x2261e8729a382ccbd5adc6f88cbd3ee9bb9c3e3871904a74b77eb7a4400c5a22` (Aztec testnet) |
+| https://poll.theinterfold.com | [`0x1a0304ED9A043eedb99BA38d3Ef7242a0178a908`](https://sepolia.etherscan.io/address/0x1a0304ED9A043eedb99BA38d3Ef7242a0178a908) | `0x0ae0f0830a94e843de00ee4b51d3b1f72158ebf9d137b6b2e7ba50dbe4e7a1c7` (Aztec testnet) |
 
-The board's CRISP program is [`0xa67B6cDa41f75F3081162D2F50C2b663Ebe3b1F4`](https://sepolia.etherscan.io/address/0xa67B6cDa41f75F3081162D2F50C2b663Ebe3b1F4) and its
+The board's CRISP program is [`0xaEa1a01775FaE5A7884Da223aD517e3c09bFA4b3`](https://sepolia.etherscan.io/address/0xaEa1a01775FaE5A7884Da223aD517e3c09bFA4b3) and its
 `ZKPassportRegistrar` (domain `poll.theinterfold.com`, proofs valid seven days) is
-[`0x2258E935662A259F1c5D58228ea6bA93F6870C03`](https://sepolia.etherscan.io/address/0x2258E935662A259F1c5D58228ea6bA93F6870C03).
+[`0xA69275d62240cD66Ca704a55eE25D9Ce27Bc4459`](https://sepolia.etherscan.io/address/0xA69275d62240cD66Ca704a55eE25D9Ce27Bc4459).
+The Aztec contract verifies ZKPassport circuits 0.23.0 (`zkpassport_version` `0x17 << 224`).
