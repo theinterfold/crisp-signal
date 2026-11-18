@@ -239,7 +239,7 @@ export function getSession(): Promise<AztecSession> {
 }
 
 async function createSession(): Promise<AztecSession> {
-  const [{ createAztecNodeClient }, { SponsoredFeePaymentMethod }, { getContractInstanceFromInstantiationParams }, { Fq, Fr }, { SPONSORED_FPC_SALT }, { SponsoredFPCContract }, { EmbeddedWallet }] =
+  const [{ createAztecNodeClient }, { SponsoredFeePaymentMethod }, { getContractInstanceFromInstantiationParams }, { Fq, Fr }, { SPONSORED_FPC_SALT }, { SponsoredFPCContract }, { EmbeddedWallet }, { openTmpStore }] =
     await Promise.all([
       import('@aztec-labs/aztec.js/node'),
       import('@aztec-labs/aztec.js/fee'),
@@ -248,10 +248,13 @@ async function createSession(): Promise<AztecSession> {
       import('@aztec-labs/constants'),
       import('@aztec-labs/noir-contracts.js/SponsoredFPC'),
       import('@aztec-labs/wallets/embedded'),
+      import('@aztec-labs/kv-store/sqlite-opfs'),
     ])
 
   const node = createAztecNodeClient(AZTEC_NODE_URL)
-  const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxe: { proverEnabled: true } })
+  // `ephemeral` covers only the wallet DB: in the browser the PXE still opens the origin's persistent OPFS store, which
+  // one tab at a time may hold, so a second tab of the app could not create a session. An in-memory store per page.
+  const wallet = await EmbeddedWallet.create(node, { ephemeral: true, pxe: { proverEnabled: true, store: await openTmpStore(true) } })
   try {
     let stored: StoredAccount | undefined
     try {
