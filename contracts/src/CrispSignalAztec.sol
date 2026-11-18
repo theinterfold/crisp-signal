@@ -10,11 +10,6 @@ interface ICrispAztecProgram {
     function interfold() external view returns (address);
 }
 
-/// @notice The part of `ZKPassportRegistrar` the board reads.
-interface IZKPassportRegistrar {
-    function program() external view returns (address);
-}
-
 /// @notice Creates CRISP signalling polls whose ballots are cast on Aztec.
 /// @dev Each poll is one Interfold E3 running `CRISPAztecProgram`: eligibility (ZKPassport), the census and
 ///      the ballots live on Aztec, the committee, the compute and the tally stay on Ethereum. This contract
@@ -22,16 +17,10 @@ interface IZKPassportRegistrar {
 ///      failed E3 back to the creator. It is the only L1 transaction a poll needs.
 ///
 ///      Poll text and options live off-chain under `metadataCid` (IPFS); the number of options and the
-///      eligibility rules (`minAge`, `allowMockDocuments`, the nationality rule and the registration path)
-///      are fixed by the E3's custom parameters, which the program checks and the Aztec contract enforces on
-///      every registration and ballot.
-///
-///      Registration is one of two paths, chosen per poll (never both: they would be two uniqueness domains):
-///      - Aztec (`l1Registration == false`): the voter's ZKPassport proof is verified on Aztec, which needs a
-///        proof the Aztec verifier accepts (circuits proved with bb 6).
-///      - L1 (`l1Registration == true`): the proof is verified on Ethereum by this deployment's
-///        `ZKPassportRegistrar`, which sends the voter's slot to Aztec through the Inbox. The registrar is fixed
-///        by the board, so a creator cannot name a registrar of their own.
+///      eligibility rules (`minAge`, `allowMockDocuments` and the nationality rule) are fixed by the E3's
+///      custom parameters, which the program checks and the Aztec contract enforces on every registration and
+///      ballot. Voters register on Aztec: their ZKPassport proof is verified there, which needs a proof the
+///      Aztec verifier accepts (circuits proved with bb 6).
 contract CrispSignalAztec {
     using SafeERC20 for IERC20;
 
@@ -51,11 +40,10 @@ contract CrispSignalAztec {
     /// @param inputWindow Unix seconds `[start, end]` during which ballots are accepted.
     /// @param minAge Minimum age voters prove with ZKPassport; 0 for none, at most 99.
     /// @param allowMockDocuments Accept ZKPassport mock documents (testing only).
-    /// @param l1Registration Register voters on Ethereum with `REGISTRAR` instead of on Aztec.
     /// @param nationalityMode 0 any nationality, 1 only `countries`, 2 all but `countries`.
     /// @param countries ICAO alpha-3 codes (`DEU`), 1 to 200 when `nationalityMode` is not 0, none otherwise.
-    /// @param nationalityCommitment Aztec path with a nationality rule: ZKPassport's commitment to `countries`
-    ///        (the Aztec verifier checks the proof against it, and Ethereum cannot recompute it); 0 otherwise.
+    /// @param nationalityCommitment With a nationality rule: ZKPassport's commitment to `countries` (the Aztec
+    ///        verifier checks the proof against it, and Ethereum cannot recompute it); 0 otherwise.
     /// @param maxFee The most the creator pays, in fee-token units.
     struct PollRequest {
         string metadataCid;
@@ -67,7 +55,6 @@ contract CrispSignalAztec {
         bytes32 expectedCryptoConfigId;
         uint256 minAge;
         bool allowMockDocuments;
-        bool l1Registration;
         uint8 nationalityMode;
         string[] countries;
         uint256 nationalityCommitment;
@@ -76,8 +63,6 @@ contract CrispSignalAztec {
 
     IInterfold public immutable INTERFOLD;
     address public immutable CRISP_PROGRAM;
-    /// @notice The `ZKPassportRegistrar` of the polls that register voters on Ethereum.
-    address public immutable REGISTRAR;
 
     Poll[] internal _polls;
 
@@ -92,15 +77,13 @@ contract CrispSignalAztec {
     error UnknownPoll(uint256 pollId);
     error NotCreator(address caller);
 
-    constructor(IInterfold interfold, address crispProgram, address registrar) {
+    constructor(IInterfold interfold, address crispProgram) {
         if (
-            address(interfold).code.length == 0 || crispProgram.code.length == 0 || registrar.code.length == 0
+            address(interfold).code.length == 0 || crispProgram.code.length == 0
                 || ICrispAztecProgram(crispProgram).interfold() != address(interfold)
-                || IZKPassportRegistrar(registrar).program() != crispProgram
         ) revert InvalidConfiguration();
         INTERFOLD = interfold;
         CRISP_PROGRAM = crispProgram;
-        REGISTRAR = registrar;
     }
 
     /// @notice Requests the poll's E3. The caller must have approved this contract for the fee
@@ -122,7 +105,6 @@ contract CrispSignalAztec {
                 CREDITS,
                 r.minAge,
                 r.allowMockDocuments,
-                r.l1Registration ? REGISTRAR : address(0),
                 r.nationalityMode,
                 r.countries,
                 r.nationalityCommitment

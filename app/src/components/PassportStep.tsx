@@ -1,71 +1,43 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { getAddress, type Address, type Hex } from 'viem'
 import { ZKPASSPORT_DOMAIN } from '../config'
-import { crispAztecProgramAbi, zkPassportRegistrarAbi } from '../lib/abi'
-import { assertServerRelaysTo, getClient, getSession, l1Registration, l1RegistrationTx, loadRound, loadZkPassportRequirements, slotKeys } from '../lib/aztec'
+import { crispAztecProgramAbi } from '../lib/abi'
+import { getClient, getSession, loadRound, loadZkPassportRequirements, slotKeys } from '../lib/aztec'
 import { errorMessage } from '../lib/format'
-import { isL1Registration, useRulesCheck, type Poll } from '../lib/polls'
-import { awaitL1Registration, registerSlot, registerSlotOnL1, type L1RegistrationStep } from '../lib/vote'
+import { useRulesCheck, type Poll } from '../lib/polls'
+import { registerSlot } from '../lib/vote'
 import { publicClient } from '../lib/chain'
 import { requestPassportProof, type PassportRequest, type ProofSummary } from '../lib/zkpassport'
-import { ExplorerLink } from './ExplorerLink'
 import { Notice } from './PollBits'
 
-type Status = 'idle' | 'opening' | 'waiting' | 'scanned' | 'proving' | 'registering' | 'relaying' | L1RegistrationStep
+type Status = 'idle' | 'opening' | 'waiting' | 'scanned' | 'proving' | 'registering'
 
 const STATUS_TEXT: Record<Status, string> = {
   idle: '',
-  opening: 'Preparing the request…',
+  opening: 'Preparing your Aztec account and the prover…',
   waiting: 'Scan the code with the ZKPassport app.',
   scanned: 'Request opened on your phone. Review it and accept.',
   proving: 'Your phone is generating the proof. This can take a minute.',
   registering: 'Registering on Aztec: your browser proves the transaction, about a minute. Keep this tab open.',
-  relaying: 'Sending your proof to the CRISP server, which submits it to Ethereum for you. No wallet or gas needed.',
-  confirming: 'Waiting for the registration transaction on Ethereum to confirm…',
-  aztec: 'Registered on Ethereum. Waiting for the keeper to add you to the poll on Aztec: the registration crosses to Aztec as a message, which takes a few minutes. Your progress is saved, so you can close this tab.',
 }
-
-/** The phone has finished: nothing is left to scan, and the QR code goes away. */
-const AFTER_PHONE: Status[] = ['registering', 'relaying', 'confirming', 'aztec']
 
 /**
  * Proves eligibility with ZKPassport and registers the voter's slot in the poll's census on Aztec: one registration per document.
  *
- * Each poll registers on one of two paths, chosen by its creator. The slot registered is always an EVM key made for this poll and
- * kept in this browser, so nothing links the voter's account, document and slot on chain.
- * - Aztec: the proof is bound to this browser's Aztec account, which proves and sends `register` from the browser.
- * - Ethereum: the `compressed-evm` proof is bound to the slot and the chain; the CRISP server submits it to the poll's
- *   `ZKPassportRegistrar` and a keeper carries the slot to Aztec. The voter then waits for it to appear in the census.
- * Neither needs an Ethereum wallet.
+ * The `compressed` proof is bound to this browser's Aztec account, which proves and sends `register` from the browser; no
+ * Ethereum wallet is needed. The slot registered is an EVM key made for this poll and kept in this browser, so nothing links the
+ * voter's account, document and slot on chain.
  */
 export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title: string; onRegistered: () => void }) {
   const queryClient = useQueryClient()
   const { rules } = poll
-  const l1 = isL1Registration(rules)
   const check = useRulesCheck(poll)
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState<string>()
   const [request, setRequest] = useState<PassportRequest>()
-  const [l1Tx, setL1Tx] = useState<Hex | undefined>(() => (l1 ? l1Registration.get(poll.e3Id) : undefined))
   const requestRef = useRef<PassportRequest>()
-  const followRef = useRef<AbortController>()
 
-  useEffect(
-    () => () => {
-      requestRef.current?.cancel()
-      followRef.current?.abort()
-    },
-    [],
-  )
-
-  // A reload while the registration crosses to Aztec: pick the wait up again instead of asking the voter to verify twice.
-  useEffect(() => {
-    const slotKey = slotKeys.get(poll.e3Id)
-    const pending = l1 ? l1Registration.get(poll.e3Id) : undefined
-    if (pending && slotKey) void follow(slotKeys.address(slotKey), pending)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  useEffect(() => () => requestRef.current?.cancel(), [])
 
   function reset() {
     requestRef.current?.cancel()
@@ -87,7 +59,7 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
     onRegistered()
   }
 
-  async function registerOnAztec(proof: ProofSummary) {
+  async function register(proof: ProofSummary) {
     setStatus('registering')
     // The phone is still told the verdict: hide the code, and cancel the request once the registration is over.
     setRequest(undefined)
@@ -100,40 +72,6 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
     }
   }
 
-  /** Waits for a registration already on Ethereum to reach the Aztec census. */
-  async function follow(slot: Address, txHash: Hex) {
-    followRef.current?.abort()
-    const controller = new AbortController()
-    followRef.current = controller
-    setError(undefined)
-    setStatus('confirming')
-    setL1Tx(txHash)
-    try {
-      await awaitL1Registration({ e3Id: poll.e3Id, slot, txHash, onStep: setStatus, signal: controller.signal })
-      l1RegistrationTx.set(poll.e3Id, txHash)
-      setL1Tx(undefined)
-      await finished()
-    } catch (e) {
-      if (controller.signal.aborted) return
-      console.error('Registration failed', e)
-      setL1Tx(l1Registration.get(poll.e3Id))
-      fail(errorMessage(e))
-    }
-  }
-
-  async function registerOnL1(params: Parameters<typeof registerSlotOnL1>[0]['params']) {
-    setStatus('relaying')
-    setRequest(undefined)
-    try {
-      const { slot, txHash } = await registerSlotOnL1({ e3Id: poll.e3Id, countries: rules.countries, params })
-      reset()
-      await follow(slot, txHash)
-    } catch (e) {
-      console.error('Registration failed', e)
-      fail(errorMessage(e))
-    }
-  }
-
   async function start() {
     setError(undefined)
     setStatus('opening')
@@ -143,67 +81,30 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
 
       const scope = await publicClient.readContract({ address: poll.program, abi: crispAztecProgramAbi, functionName: 'scopeOf', args: [poll.e3Id] })
       // Made before anything is registered with it, so a crash cannot orphan a registration.
-      const slot = slotKeys.address(slotKeys.getOrCreate(poll.e3Id))
-      const purpose = `Check you are eligible to vote in "${title}"`
-      const events = {
-        onScanned: () => setStatus('scanned'),
-        onProving: () => setStatus('proving'),
-        onRejected: () => fail('The request was declined in the ZKPassport app.'),
-        onError: fail,
-      }
-
-      let opened: PassportRequest
-      if (l1) {
-        const registrar = getAddress(rules.registrar)
-        const [program, domain, validity] = await Promise.all([
-          publicClient.readContract({ address: registrar, abi: zkPassportRegistrarAbi, functionName: 'program' }),
-          publicClient.readContract({ address: registrar, abi: zkPassportRegistrarAbi, functionName: 'domain' }),
-          publicClient.readContract({ address: registrar, abi: zkPassportRegistrarAbi, functionName: 'validityPeriod' }),
-          assertServerRelaysTo(registrar),
-        ])
-        if (program !== poll.program) throw new Error(`This poll's registrar belongs to program ${program}, not ${poll.program}.`)
-        opened = await requestPassportProof(
-          {
-            domain,
-            scope,
-            rules,
-            validitySeconds: Number(validity),
-            purpose,
-            target: {
-              path: 'l1',
-              slot,
-              onProof: (params) => {
-                // Answer the phone at once: the registration takes minutes, and the chain, not this page, verifies the proof.
-                void registerOnL1(params)
-                return true
-              },
-            },
+      slotKeys.getOrCreate(poll.e3Id)
+      const [session, client] = await Promise.all([getSession(), getClient()])
+      const requirements = await loadZkPassportRequirements(client)
+      const opened = await requestPassportProof(
+        {
+          domain: ZKPASSPORT_DOMAIN,
+          scope,
+          rules,
+          validitySeconds: requirements.validitySeconds,
+          purpose: `Check you are eligible to vote in "${title}"`,
+          aztecAddress: session.address.toString(),
+          expected: { circuitsVersion: requirements.circuitsVersion },
+          onProof: (proof) => {
+            void register(proof)
+            return true
           },
-          events,
-        )
-      } else {
-        const [session, client] = await Promise.all([getSession(), getClient()])
-        const requirements = await loadZkPassportRequirements(client)
-        opened = await requestPassportProof(
-          {
-            domain: ZKPASSPORT_DOMAIN,
-            scope,
-            rules,
-            validitySeconds: requirements.validitySeconds,
-            purpose,
-            target: {
-              path: 'aztec',
-              aztecAddress: session.address.toString(),
-              expected: { circuitsVersion: requirements.circuitsVersion },
-              onProof: (proof) => {
-                void registerOnAztec(proof)
-                return true
-              },
-            },
-          },
-          events,
-        )
-      }
+        },
+        {
+          onScanned: () => setStatus('scanned'),
+          onProving: () => setStatus('proving'),
+          onRejected: () => fail('The request was declined in the ZKPassport app.'),
+          onError: fail,
+        },
+      )
       requestRef.current = opened
       setRequest(opened)
       setStatus('waiting')
@@ -214,13 +115,13 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
   }
 
   const busy = status !== 'idle'
-  const afterPhone = AFTER_PHONE.includes(status)
+  const registering = status === 'registering'
   const rulesVerdict = check.data
   const blocked = rulesVerdict && !rulesVerdict.ok ? rulesVerdict.reason : undefined
 
   return (
     <div className="stack" style={{ gap: 12 }}>
-      {request && !afterPhone && (
+      {request && !registering && (
         <div className="qr">
           <img src={request.qr} alt="ZKPassport request QR code" />
           <a className="small" href={request.url} target="_blank" rel="noreferrer">
@@ -230,13 +131,8 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
       )}
       {busy && (
         <div className="row small">
-          <span className="spinner" /> {status === 'opening' && !l1 ? 'Preparing your Aztec account and the prover…' : STATUS_TEXT[status]}
+          <span className="spinner" /> {STATUS_TEXT[status]}
         </div>
-      )}
-      {l1Tx && afterPhone && (
-        <p className="muted small">
-          Ethereum transaction <ExplorerLink chain="l1" kind="tx" id={l1Tx} />
-        </p>
       )}
       {blocked && <Notice tone="error">{blocked} Do not register for this poll.</Notice>}
       {check.error && <Notice tone="warning">Could not check the poll's nationality rule: {errorMessage(check.error)}</Notice>}
@@ -246,7 +142,7 @@ export function PassportStep({ poll, title, onRegistered }: { poll: Poll; title:
           Verify with ZKPassport
         </button>
       )}
-      {busy && !afterPhone && (
+      {busy && !registering && (
         <button
           className="btn ghost sm"
           onClick={() => {

@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Address } from 'viem'
 import { CheckCircle } from '@phosphor-icons/react'
-import { exportSecrets, l1RegistrationTx, slotKeys } from '../lib/aztec'
+import { exportSecrets, slotKeys } from '../lib/aztec'
 import { errorMessage, formatDate, OPTION_COLORS } from '../lib/format'
-import { isL1Registration, type Phase, type Poll } from '../lib/polls'
+import type { Phase, Poll } from '../lib/polls'
 import { inputReceipt, randomRegistrant, submitBallot, type BallotKind, type InputKind, type VoteProgress, type VoteStep } from '../lib/vote'
 import { ExplorerLink } from './ExplorerLink'
 import { PassportStep } from './PassportStep'
@@ -65,29 +65,13 @@ function TxHash({ hash }: { hash: string }) {
   )
 }
 
-/**
- * How this browser's slot got into the census: the Ethereum registration (kept by this browser, on polls that register there) and the
- * Aztec transaction that added it, read from the contract's public logs.
- */
+/** The Aztec transaction that added this browser's slot to the census, read from the contract's public logs. */
 function RegistrationTxs({ poll, index }: { poll: Poll; index: number }) {
-  const l1Tx = isL1Registration(poll.rules) ? l1RegistrationTx.get(poll.e3Id) : undefined
   const aztecTx = poll.aztec?.txs.members[index]
-  if (!l1Tx && !aztecTx) return null
+  if (!aztecTx) return null
   return (
     <p className="muted small" style={{ marginBottom: 0 }}>
-      Registered
-      {l1Tx && (
-        <>
-          {' · Ethereum tx '}
-          <ExplorerLink chain="l1" kind="tx" id={l1Tx} />
-        </>
-      )}
-      {aztecTx && (
-        <>
-          {' · Aztec tx '}
-          <ExplorerLink chain="aztec" kind="tx" id={aztecTx} />
-        </>
-      )}
+      Registered · Aztec tx <ExplorerLink chain="aztec" kind="tx" id={aztecTx} />
     </p>
   )
 }
@@ -190,11 +174,8 @@ export function VotePanel({ poll, phase, options, title }: { poll: Poll; phase: 
             <>
               <p className="muted small" style={{ marginBottom: 12 }}>
                 Scan with the ZKPassport app and tap your passport or ID card on your phone. The proof reveals only that
-                you meet the rules and that this document has not registered for this poll before.{' '}
-                {isL1Registration(poll.rules)
-                  ? 'It is bound to a key this browser creates for this poll, and the CRISP server submits it to Ethereum for you.'
-                  : 'It is bound to an Aztec account this browser creates for you.'}{' '}
-                No Ethereum wallet is needed.
+                you meet the rules and that this document has not registered for this poll before. It is bound to an Aztec
+                account this browser creates for you. No Ethereum wallet is needed.
               </p>
               <PassportStep poll={poll} title={title} onRegistered={() => refresh((n) => n + 1)} />
             </>

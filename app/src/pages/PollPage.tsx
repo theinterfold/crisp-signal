@@ -6,7 +6,7 @@ import { BOARD_ADDRESS } from '../config'
 import { countryNames, eligibilityChips, errorMessage, formatDate, shortAddress, shortHex, timing } from '../lib/format'
 import { useNow } from '../lib/clock'
 import { fetchMetadata } from '../lib/ipfs'
-import { isL1Registration, NationalityMode, phaseOf, usePoll, useRulesCheck, type Phase, type Poll } from '../lib/polls'
+import { NationalityMode, phaseOf, usePoll, useRulesCheck, type Phase, type Poll } from '../lib/polls'
 import { Notice, PhaseBadge, Results } from '../components/PollBits'
 import { ResultStatus } from '../components/ResultStatus'
 import { VotePanel } from '../components/VotePanel'
@@ -146,7 +146,6 @@ function resultsPending(phase: Phase) {
 function Eligibility({ poll }: { poll: Poll }) {
   const { rules } = poll
   const check = useRulesCheck(poll)
-  const l1 = isL1Registration(rules)
   return (
     <section className="card">
       <h2 style={{ marginBottom: 14 }}>Who can vote</h2>
@@ -165,9 +164,7 @@ function Eligibility({ poll }: { poll: Poll }) {
         </p>
       )}
       <p className="muted small" style={{ marginBottom: 14 }}>
-        {l1
-          ? 'Voters register with ZKPassport on Ethereum: the CRISP server submits their proof, so no wallet is needed, and a keeper carries the registration to Aztec, where the ballots are cast.'
-          : 'Voters register with ZKPassport on Aztec, from their browser, and cast their ballots there.'}
+        Voters register with ZKPassport on Aztec, from their browser, and cast their ballots there.
       </p>
       {check.data && !check.data.ok && <Notice tone="error">{check.data.reason} Do not register for this poll.</Notice>}
       {rules.allowMockDocuments && (
@@ -223,8 +220,6 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
       <details className="fold">
         <summary>On-chain details</summary>
         <dl className="kv">
-          <dt>Registration</dt>
-          <dd>{isL1Registration(poll.rules) ? 'on Ethereum, relayed to Aztec' : 'on Aztec'}</dd>
           <dt>Aztec round</dt>
           <dd>{aztecRound(poll)}</dd>
           {txs?.opened && (
@@ -287,14 +282,6 @@ function Details({ poll, phase }: { poll: Poll; phase: Phase }) {
           <dd>
             <ExplorerLink chain="l1" kind="address" id={poll.program} label={shortAddress(poll.program)} />
           </dd>
-          {isL1Registration(poll.rules) && (
-            <>
-              <dt>Registrar</dt>
-              <dd>
-                <ExplorerLink chain="l1" kind="address" id={poll.rules.registrar} label={shortAddress(poll.rules.registrar)} />
-              </dd>
-            </>
-          )}
           {aztec.data && (
             <>
               <dt>Aztec contract</dt>

@@ -74,12 +74,3 @@ contract MockInterfold {
         return refund;
     }
 }
-
-/// @dev Stands in for `ZKPassportRegistrar`: the board only reads the program it is bound to.
-contract MockRegistrar {
-    address public immutable program;
-
-    constructor(address program_) {
-        program = program_;
-    }
-}

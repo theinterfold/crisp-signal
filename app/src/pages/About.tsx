@@ -7,7 +7,7 @@ const STEPS = [
   },
   {
     title: 'Voters prove eligibility with ZKPassport',
-    body: "The ZKPassport app reads the passport or ID card chip and proves on the phone that its holder meets the rules: a minimum age and a nationality rule (only, or all but, a list of countries), if the poll sets them. Each poll registers its voters one way, chosen by its creator. On Ethereum, the CRISP server submits the proof to a ZKPassport verifier for the voter and a keeper carries the registration to Aztec; on Aztec, the voter's browser proves it straight into the poll's contract, paid by Aztec's sponsored fee contract. Either way there is no Ethereum wallet and no gas for voters. The poll learns a per-poll identifier for the document, so the same document cannot register twice, and nothing else about the person.",
+    body: "The ZKPassport app reads the passport or ID card chip and proves on the phone that its holder meets the rules: a minimum age and a nationality rule (only, or all but, a list of countries), if the poll sets them. The voter's browser proves the registration straight into the poll's contract on Aztec, paid by Aztec's sponsored fee contract, so there is no Ethereum wallet and no gas for voters. The poll learns a per-poll identifier for the document, so the same document cannot register twice, and nothing else about the person.",
   },
   {
     title: 'Ballots are encrypted and proven in the browser',
@@ -25,8 +25,7 @@ const STEPS = [
 
 const LIMITS = [
   'Eligibility is per document: someone with two qualifying documents (for example a passport and an ID card) can register twice.',
-  'Verification trusts ZKPassport\'s circuits and its certificate registry (on Ethereum, or on Aztec for polls that register there), which ZKPassport administers.',
-  'On polls that register on Ethereum the CRISP server only relays: the registrar verifies the proof, and the proof binds the voter\'s slot, so the server cannot register anyone or redirect a registration, but it can delay one by not submitting it.',
+  'Verification trusts ZKPassport\'s circuits and its certificate registry on Aztec, which ZKPassport administers.',
   'This demo runs on Ethereum Sepolia and the Aztec testnet, with mock compute verification and a mock data-availability layer.',
   'Your Aztec account and per-poll slot keys live in this browser: clearing its storage loses them, so download the backup the poll page offers.',
   'Polls that accept mock IDs are open to anyone: use them for rehearsals only.',

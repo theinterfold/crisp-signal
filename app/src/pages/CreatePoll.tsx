@@ -28,21 +28,6 @@ const SUBMIT_SLACK = 10 * MINUTE
 const MAX_AGE = 99
 /** Mock ZKPassport documents carry this nationality. */
 const MOCK_NATIONALITY = 'ZKR'
-type Registration = 'l1' | 'aztec'
-const REGISTRATIONS: { value: Registration; title: string; badge: string; body: string }[] = [
-  {
-    value: 'l1',
-    title: 'On Ethereum',
-    badge: 'Works with the ZKPassport app today',
-    body: 'Voters scan with the ZKPassport app; the CRISP server submits their proof to a ZKPassport verifier on Ethereum, and a keeper carries each registration to Aztec, a few minutes later. Ballots are still cast on Aztec.',
-  },
-  {
-    value: 'aztec',
-    title: 'On Aztec',
-    badge: 'Needs a bb-6 ZKPassport app',
-    body: "Voters' browsers prove their registration straight into the Aztec contract. Aztec 6 only verifies proofs made with the bb 6 prover, which today's ZKPassport app does not produce yet, so registration fails until it does.",
-  },
-]
 
 const COMMITTEES = [
   { value: 0, label: 'Minimum', hint: 'Smallest committee, lowest fee.' },
@@ -154,7 +139,6 @@ export function CreatePollPage() {
   const [duration, setDuration] = useState(DAY)
   const [committeeSize, setCommitteeSize] = useState(0)
 
-  const [registration, setRegistration] = useState<Registration>('l1')
   const [minAge, setMinAge] = useState(18)
   const [nationalityMode, setNationalityMode] = useState<NationalityMode>(NationalityMode.None)
   const [countries, setCountries] = useState<string[]>([])
@@ -253,9 +237,9 @@ export function CreatePollPage() {
       }
 
       // The Aztec contract verifies proofs against ZKPassport's commitment to the country list, which Ethereum cannot compute: the
-      // creator supplies it, and voters' browsers recompute it from the list before they register. The Ethereum path checks the list itself.
+      // creator supplies it, and voters' browsers recompute it from the list before they register.
       let nationalityCommitment = 0n
-      if (registration === 'aztec' && nationalityMode !== NationalityMode.None) {
+      if (nationalityMode !== NationalityMode.None) {
         setStep('committing')
         nationalityCommitment = await (await loadSdk()).nationalityCommitment(nationalityMode, ruleCountries)
       }
@@ -288,7 +272,6 @@ export function CreatePollPage() {
         expectedCryptoConfigId: CRYPTO_CONFIG_ID[PARAM_SET],
         minAge: BigInt(minAge),
         allowMockDocuments,
-        l1Registration: registration === 'l1',
         nationalityMode,
         countries: ruleCountries,
         nationalityCommitment,
@@ -440,25 +423,6 @@ export function CreatePollPage() {
                 </span>
               </span>
             </label>
-          </section>
-
-          <section className="card stack">
-            <h2>How voters register</h2>
-            <p className="muted small">
-              Each poll registers its voters one way, never both, so a document can only ever register once. Ballots are cast on
-              Aztec either way.
-            </p>
-            {REGISTRATIONS.map((r) => (
-              <label className="toggle" key={r.value}>
-                <input type="radio" name="registration" checked={registration === r.value} onChange={() => setRegistration(r.value)} />
-                <span>
-                  <strong>
-                    {r.title} <span className="chip">{r.badge}</span>
-                  </strong>
-                  <span className="hint">{r.body}</span>
-                </span>
-              </label>
-            ))}
           </section>
         </div>
 
