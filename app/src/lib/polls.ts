@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { decodeAbiParameters, type Address } from 'viem'
 import { BOARD_ADDRESS, INTERFOLD_ADDRESS } from '../config'
 import { crispAztecProgramAbi, crispSignalAztecAbi, E3Stage, interfoldAbi } from './abi'
-import { loadRound, loadSdk, type RoundTxs } from './aztec'
+import { loadPassportSdk, loadRound, type RoundTxs } from './aztec'
 import { publicClient } from './chain'
 
 /** ZKPassport nationality rule of a poll: any nationality, only the listed countries, or all but the listed countries. */
@@ -64,7 +64,7 @@ export async function checkRules(rules: PollRules): Promise<{ ok: true } | { ok:
       ? { ok: true }
       : { ok: false, reason: 'The poll carries a nationality commitment it does not use.' }
   }
-  const { nationalityCommitment } = await loadSdk()
+  const { nationalityCommitment } = await loadPassportSdk()
   const expected = await nationalityCommitment(rules.nationalityMode, rules.countries)
   return expected === rules.nationalityCommitment
     ? { ok: true }

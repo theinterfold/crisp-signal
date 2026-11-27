@@ -40,20 +40,34 @@ export const WALLETCONNECT_PROJECT_ID: string | undefined = env.VITE_WALLETCONNE
 
 export const BOARD_ADDRESS: Address = address('VITE_BOARD_ADDRESS', env.VITE_BOARD_ADDRESS)
 
-/** The running Sepolia deployment (`@interfold/contracts` 0.20.0-dev.3, `@crisp-e3/sdk` 0.28.1). */
-export const INTERFOLD_ADDRESS: Address = '0xb35EE9ed8BE5967daabBA8c2e817C52D0b57ac26'
+/** The running Sepolia deployment (`@interfold/contracts` 0.20.0, `@crisp-e3/sdk` 0.29.0). */
+export const INTERFOLD_ADDRESS: Address = '0x5611c8aa517FE57D05229Ff94eA37E88b1b8FDDB'
 export const FAUCET_ADDRESS: Address = '0x1B4340A65BB669267BF5DE37385B139987C3F09c'
 
+/** Sepolia's ciphernodes run the insecure 64-degree set (id 4); it proves in seconds in a browser. */
+export const PARAM_SET = 4
+
 /**
- * The circuit configuration Interfold binds to each BFV parameter set (`BfvProtocol.*_CONFIG_ID`).
- * A request names the one it expects, so a coordinator upgrade cannot switch circuits under it.
+ * The crypto configuration Interfold binds to a BFV parameter set AND a committee size (`ActiveCryptoConfig.configIdForRequest`).
+ * A request names the one it expects, so a coordinator upgrade cannot switch circuits under it; any other combination reverts
+ * with `CryptoConfigChanged`. Keyed `paramSet:committeeSize`.
  */
-export const CRYPTO_CONFIG_ID: Readonly<Record<number, Hex>> = {
-  0: '0x92c8b373eb72cc3600a5a818cf8599db16e618ee3ece2dadd14f8608c1a43ac9',
-  2: '0xa174862efd4487031d423ca96516807775ade0191c714e513aab93d0cc289baa',
+const CRYPTO_CONFIG_ID: Readonly<Record<string, Hex>> = {
+  // insecure-64
+  '4:0': '0xd76c4f521394e6cbe1df28036cc5dd5590c6630a403525b5c2b052f9b91507f4',
+  '4:1': '0x893989231b402942b005fecdbf9eae21b227d861085433293d0873547ea2816a',
+  '4:2': '0x7fa922a08c5501592d02394205bb600219da3e168e0432f076465569116ccfe3',
+  // secure-8192
+  '3:0': '0x0acc89be9b1f39b0c1ee06493af3bad6f5685bf60e0f1cec7a733e95caaab87a',
+  '3:1': '0xebe75e3c1ada2079e5a06e5853d710b67ac296959c6b67f7d82b44312574dd0b',
+  '3:2': '0x41d2f2a41bfb17dfb292332d8283b3a9238f9fa8fdc4eecf87de4d777f95c891',
 }
 
-/** Sepolia supports the insecure 64-degree set; it proves in seconds in a browser. */
-export const PARAM_SET = 0
+/** The config id a request of this parameter set and committee size must expect; throws for a combination Interfold has no id for. */
+export function cryptoConfigId(paramSet: number, committeeSize: number): Hex {
+  const id = CRYPTO_CONFIG_ID[`${paramSet}:${committeeSize}`]
+  if (!id) throw new Error(`Interfold has no crypto configuration for parameter set ${paramSet} with committee size ${committeeSize}.`)
+  return id
+}
 /** CRISP ignores it on-chain; the server and runner read their own configuration. */
 export const COMPUTE_PROVIDER_PARAMS = '{"name":"OpenVM","parallel":false,"batch_size":4}'

@@ -1,4 +1,4 @@
-import type { CompressedProofResult } from '@crisp-e3/aztec'
+import type { CompressedProofResult } from '@crisp-e3/aztec/passport'
 import type { ProofResult } from '@zkpassport/sdk'
 import { isHex } from 'viem'
 import { NationalityMode, type PollRules } from './polls'

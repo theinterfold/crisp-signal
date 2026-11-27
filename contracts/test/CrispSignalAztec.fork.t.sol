@@ -25,10 +25,10 @@ interface IFaucet {
 /// @notice Runs against the live Sepolia deployment. Skipped unless SEPOLIA_RPC_URL and CRISP_AZTEC_PROGRAM (the
 ///         deployed `CRISPAztecProgram`) are set.
 contract CrispSignalAztecForkTest is Test {
-    IInterfold internal constant INTERFOLD = IInterfold(0xb35EE9ed8BE5967daabBA8c2e817C52D0b57ac26);
+    IInterfold internal constant INTERFOLD = IInterfold(0x5611c8aa517FE57D05229Ff94eA37E88b1b8FDDB);
     IFaucet internal constant FAUCET = IFaucet(0x1B4340A65BB669267BF5DE37385B139987C3F09c);
-    /// @dev `BfvProtocol.INSECURE_CONFIG_ID` of `@interfold/contracts` 0.20.0-dev.3: param set 0.
-    bytes32 internal constant INSECURE = 0x92c8b373eb72cc3600a5a818cf8599db16e618ee3ece2dadd14f8608c1a43ac9;
+    /// @dev Crypto config id of param set 4 (insecure-64) with `CommitteeSize.Minimum` in `@interfold/contracts` 0.20.0.
+    bytes32 internal constant INSECURE = 0xd76c4f521394e6cbe1df28036cc5dd5590c6630a403525b5c2b052f9b91507f4;
 
     address internal program;
     CrispSignalAztec internal board;
@@ -50,6 +50,7 @@ contract CrispSignalAztecForkTest is Test {
         // Key setup worst case plus the key deadline: start well after the request.
         r.inputWindow = [block.timestamp + 6 hours, block.timestamp + 6 hours + 1 days];
         r.computeProviderParams = bytes('{"name":"OpenVM","parallel":false,"batch_size":4}');
+        r.paramSet = 4;
         r.expectedCryptoConfigId = INSECURE;
         r.minAge = 18;
         r.allowMockDocuments = true;

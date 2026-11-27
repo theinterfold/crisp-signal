@@ -4,13 +4,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAccount, useReadContracts, useWriteContract } from 'wagmi'
 import { formatUnits, parseEventLogs, stringToHex, zeroAddress, type Address } from 'viem'
 import { Plus, Trash } from '@phosphor-icons/react'
-import { BOARD_ADDRESS, CHAIN, COMPUTE_PROVIDER_PARAMS, CRYPTO_CONFIG_ID, FAUCET_ADDRESS, INTERFOLD_ADDRESS, PARAM_SET } from '../config'
+import { BOARD_ADDRESS, CHAIN, COMPUTE_PROVIDER_PARAMS, cryptoConfigId, FAUCET_ADDRESS, INTERFOLD_ADDRESS, PARAM_SET } from '../config'
 import { CountryPicker, MAX_COUNTRIES } from '../components/CountryPicker'
 import { Notice } from '../components/PollBits'
 import { ciphernodeRegistryAbi, crispAztecProgramAbi, crispSignalAztecAbi, erc20Abi, faucetAbi, interfoldAbi } from '../lib/abi'
 import { errorMessage, formatDuration, OPTION_COLORS } from '../lib/format'
 import { DurationInput } from '../components/DurationInput'
-import { loadSdk } from '../lib/aztec'
+import { loadPassportSdk } from '../lib/aztec'
 import { uploadMetadata } from '../lib/ipfs'
 import { MAX_OPTIONS, type PollMetadata } from '../lib/metadata'
 import { NationalityMode } from '../lib/polls'
@@ -118,7 +118,7 @@ async function quote({ program, feeToken }: Setup, committeeSize: number, window
         computeProviderParams: '0x',
         customParams: '0x',
         expectedFeeToken: feeToken,
-        expectedCryptoConfigId: CRYPTO_CONFIG_ID[PARAM_SET],
+        expectedCryptoConfigId: cryptoConfigId(PARAM_SET, committeeSize),
         maxFee: 0n,
       },
     ],
@@ -241,7 +241,7 @@ export function CreatePollPage() {
       let nationalityCommitment = 0n
       if (nationalityMode !== NationalityMode.None) {
         setStep('committing')
-        nationalityCommitment = await (await loadSdk()).nationalityCommitment(nationalityMode, ruleCountries)
+        nationalityCommitment = await (await loadPassportSdk()).nationalityCommitment(nationalityMode, ruleCountries)
       }
 
       // Quote the exact window the transaction will request, then allow a little drift.
@@ -269,7 +269,7 @@ export function CreatePollPage() {
         committeeSize,
         paramSet: PARAM_SET,
         computeProviderParams: stringToHex(COMPUTE_PROVIDER_PARAMS),
-        expectedCryptoConfigId: CRYPTO_CONFIG_ID[PARAM_SET],
+        expectedCryptoConfigId: cryptoConfigId(PARAM_SET, committeeSize),
         minAge: BigInt(minAge),
         allowMockDocuments,
         nationalityMode,

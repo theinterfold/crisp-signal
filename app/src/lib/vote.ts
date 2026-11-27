@@ -1,5 +1,6 @@
 import type { ProofStage, SlotHead } from '@crisp-e3/sdk'
-import type { CastArguments, Census, CompressedProofResult, CrispAztec, InputAttestation } from '@crisp-e3/aztec'
+import type { CastArguments, Census, InputAttestation } from '@crisp-e3/aztec'
+import type { CompressedProofResult, CrispAztec } from '@crisp-e3/aztec/passport'
 import { bytesToHex, hexToBytes, keccak256, recoverAddress, type Address, type Hex } from 'viem'
 import { sign } from 'viem/accounts'
 import { CHAIN, CRISP_SERVER_URL, INTERFOLD_ADDRESS, RPC_URL } from '../config'
@@ -183,7 +184,7 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
   // The digest the contract checks: the voter signs it with the slot's key. A mask carries the same digest and no signature.
   const digest = ballotDigest({ l1ChainId, program, e3Id, slot, ciphertextCommitment: prepared.ctCommitment })
   const proving = `Proving the ${noun} is well-formed`
-  // No aggregation: the Aztec contract verifies the three base proofs (the two encryption proofs and the ballot proof) itself, so
+  // No aggregation: the Aztec contract verifies the two base proofs (the encryption proof and the ballot proof) itself, so
   // the proofs stay in this browser, as private arguments of `cast`.
   const options = {
     onProgress: ({ stage, index, total }: { stage: ProofStage; index: number; total: number }) =>
@@ -196,8 +197,8 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
 
   const pi = result.crisp.publicInputs.map((value) => BigInt(value))
   if (pi.length !== 10) throw new Error(`The ballot proof has ${pi.length} public inputs, expected 10`)
-  if (result.ct0.publicInputs.length !== 4 || result.ct1.publicInputs.length !== 3) {
-    throw new Error('The encryption proofs have an unexpected number of public inputs')
+  if (result.encryption.publicInputs.length !== 3) {
+    throw new Error('The encryption proof has an unexpected number of public inputs')
   }
   if (pi[PI.CENSUS_ROOT] !== args.census.root) throw new Error('The proof was made against a different census root than the one rebuilt from the logs')
   if (pi[PI.CT_COMMITMENT] !== BigInt(prepared.ctCommitment)) throw new Error('The proof commits to a different ciphertext than the one prepared')
@@ -213,9 +214,11 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
   // The pass proves, without saying which, that the sender holds the key of SOME registered slot, so the server's storage cannot be
   // filled by outsiders; its tag limits each slot key to `maxRequests` stagings a round, votes and masks alike. Each pass takes the
   // next counter, and a pass the server refused has used its own.
+  let passCounter = 0
   const stagePass = async (): Promise<InputAttestation> => {
     args.onProgress({ step: 'pass', detail: `Proving you hold a registered slot, without saying which (a staging pass for the ${noun})` })
     let stagingPass
+    passCounter = args.staging.nextCounter()
     try {
       stagingPass = await buildStagingPass({
         signer: (hash) => sign({ hash, privateKey: args.staging.signer, to: 'hex' }),
@@ -223,7 +226,7 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
         credits: args.credits,
         request: { l1ChainId, program, ...staged },
         maxRequests: args.staging.maxRequests,
-        counter: args.staging.nextCounter(),
+        counter: passCounter,
       })
     } finally {
       // Frees the pass prover's WASM instance and its SRS; a later pass makes a new one.
@@ -261,12 +264,9 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
 
   return {
     e3Id,
-    ct0Vk: toBigints(result.ct0.vkFields),
-    ct0Proof: toBigints(result.ct0.proofFields),
-    ct0PublicInputs: toBigints(result.ct0.publicInputs),
-    ct1Vk: toBigints(result.ct1.vkFields),
-    ct1Proof: toBigints(result.ct1.proofFields),
-    ct1PublicInputs: toBigints(result.ct1.publicInputs),
+    encryptionVk: toBigints(result.encryption.vkFields),
+    encryptionProof: toBigints(result.encryption.proofFields),
+    encryptionPublicInputs: toBigints(result.encryption.publicInputs),
     crispVk: toBigints(result.crisp.vkFields),
     crispProof: toBigints(result.crisp.proofFields),
     slot,
@@ -279,6 +279,7 @@ async function buildCast(args: BuildCastArgs): Promise<CastArguments> {
     signature: attestation.signature,
     encryptedVote: result.encryptedVote,
     attestation,
+    stagingCounter: passCounter,
   }
 }
 

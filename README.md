@@ -8,7 +8,7 @@ decrypted. Results are signals: nothing is executed on-chain.
 
 ```
 contracts/   Foundry: CrispSignalAztec, the poll board on Sepolia
-app/         Vite + React front end; vendor/ holds the CRISP SDK tarballs
+app/         Vite + React front end
 ```
 
 ## How it fits together
@@ -115,15 +115,15 @@ After changing the contracts, regenerate the app's ABI from `contracts/out` into
 
 ```sh
 cd app
-npm install             # the CRISP SDKs are tarballs in vendor/
+npm install             # @crisp-e3/sdk and @crisp-e3/aztec 0.29.0 from npm
 cp .env.example .env    # set VITE_BOARD_ADDRESS and PINATA_JWT
 npm run dev             # http://localhost:5180
 npm run build
 ```
 
-`vendor/crisp-e3-sdk-0.28.1.tgz` is `@crisp-e3/sdk` from crisp-aztec (with the base-proof API `cast` uses); `vendor/crisp-e3-aztec-0.28.1.tgz` is `@crisp-e3/aztec` with the CRISP Aztec contract's
-artifact. Rebuild them with `pnpm pack` in `packages/crisp-sdk` and `extensions/aztec/sdk` of
-crisp-aztec (the Aztec SDK carries `nationalityCommitment`, which the app uses). `package.json` overrides `@crisp-e3/sdk` so the Aztec SDK uses the vendored one.
+The app uses `@crisp-e3/sdk` and `@crisp-e3/aztec` 0.29.0 from npm. The ZKPassport round client (`CrispAztec`,
+`nationalityCommitment`) comes from the `@crisp-e3/aztec/passport` entry; `package.json` overrides `@crisp-e3/sdk` so
+both packages share one copy. `npm run build` can need a larger heap: `NODE_OPTIONS=--max-old-space-size=8192`.
 
 | Variable | Purpose |
 |---|---|
@@ -175,7 +175,7 @@ Creating a poll costs the Interfold fee in Sepolia MockUSDC (about 22 USDC for a
 the Minimum committee); the create page links the testnet faucet. A poll's voting window must open
 after the committee's key setup (about 40 minutes) and last at least an hour.
 
-Voting is real in-browser proving (Aztec private kernel proofs, then the ballot's three base proofs): expect a
+Voting is real in-browser proving (Aztec private kernel proofs, then the ballot's two base proofs (encryption and ballot rules)): expect a
 minute or more per transaction, and keep the tab open. So is registering.
 
 ## Limits
@@ -192,8 +192,13 @@ minute or more per transaction, and keep the tab open. So is registering.
 
 ## Current Sepolia deployment
 
+Interfold `0.20.0` on Sepolia: Interfold [`0x5611c8aa517FE57D05229Ff94eA37E88b1b8FDDB`](https://sepolia.etherscan.io/address/0x5611c8aa517FE57D05229Ff94eA37E88b1b8FDDB),
+fee token MockUSDC `0xE2e534F7Cb95777eD870CDCaCb80B1E9E2aD555B`, faucet `0x1B4340A65BB669267BF5DE37385B139987C3F09c`. Parameter set 4
+(`insecure-64`), committee of three (`Minimum`). A request names the crypto config id of its parameter set and committee size
+(`cryptoConfigId` in `app/src/config.ts`).
+
 | App | `CrispSignalAztec` | `CRISPAztecProgram` | Aztec CRISP contract |
 |---|---|---|---|
-| https://poll.theinterfold.com | [`0x822312ca850B82AD72fDDE738C9dE8deAD31578C`](https://sepolia.etherscan.io/address/0x822312ca850B82AD72fDDE738C9dE8deAD31578C) | [`0x81D62b7E8F046953eA77378aC027f2ece3044307`](https://sepolia.etherscan.io/address/0x81D62b7E8F046953eA77378aC027f2ece3044307) | `0x12baf9572114fb2502982b06736ec0946afd57ba1f9b2c05964306d04856f1d2` (Aztec testnet) |
+| https://poll.theinterfold.com | [`0x0faB5C8fBBBb45E26bf4eedaB5Cc1a15e4223AA3`](https://sepolia.etherscan.io/address/0x0faB5C8fBBBb45E26bf4eedaB5Cc1a15e4223AA3) | [`0x3eCFB1F15FB66C524E6c93Da427bD42066FBE9c8`](https://sepolia.etherscan.io/address/0x3eCFB1F15FB66C524E6c93Da427bD42066FBE9c8) | `0x032392ec7fe49760082a98ab724ca7f6b2cc111818bce13bed56eef19f16bd57` (Aztec testnet) |
 
 The Aztec contract verifies ZKPassport circuits 0.23.0 (`zkpassport_version` `0x17 << 224`).
