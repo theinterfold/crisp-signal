@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Address } from 'viem'
 import { CheckCircle } from '@phosphor-icons/react'
+import type { ProofStage } from '@crisp-e3/sdk'
 import { exportSecrets, slotKeys } from '../lib/aztec'
 import { errorMessage, formatDate, OPTION_COLORS } from '../lib/format'
 import type { Phase, Poll } from '../lib/polls'
@@ -9,6 +10,13 @@ import { inputReceipt, randomRegistrant, submitBallot, type BallotKind, type Inp
 import { ExplorerLink } from './ExplorerLink'
 import { PassportStep } from './PassportStep'
 import { Notice, StepRow } from './PollBits'
+
+/** What each proof the browser makes is for (`ProofStage` of `@crisp-e3/sdk`; the contract verifies the first two, no fold). */
+const PROOF_STAGE_LABEL: Record<ProofStage, string> = {
+  encryption: 'encryption',
+  ballot: 'ballot rules',
+  fold: 'fold',
+}
 
 const STEPS: Record<InputKind, { step: VoteStep; label: string }[]> = {
   vote: [
@@ -45,7 +53,7 @@ function Progress({ kind, progress }: { kind: InputKind; progress: VoteProgress 
           detail={
             i === current
               ? progress.proofTotal
-                ? `${progress.detail} (${(progress.proofIndex ?? 0) + 1}/${progress.proofTotal}: ${progress.proofStage})`
+                ? `${progress.detail} (${(progress.proofIndex ?? 0) + 1}/${progress.proofTotal}: ${PROOF_STAGE_LABEL[progress.proofStage!]})`
                 : progress.detail
               : undefined
           }

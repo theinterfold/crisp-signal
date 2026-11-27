@@ -25,7 +25,7 @@ contract CrispSignalAztecTest is Test {
         r.numOptions = 3;
         r.inputWindow = [block.timestamp + 3600, block.timestamp + 90_000];
         r.committeeSize = IInterfold.CommitteeSize.Micro;
-        r.paramSet = 0;
+        r.paramSet = 4;
         r.computeProviderParams = bytes('{"name":"OpenVM"}');
         r.expectedCryptoConfigId = keccak256("config");
         r.minAge = 18;

@@ -2,8 +2,8 @@ import type { CircuitBundle, CircuitPreset } from '@crisp-e3/sdk'
 import { loadCrispSdk } from './aztec'
 
 const CIRCUITS: Record<number, { preset: CircuitPreset; load: () => Promise<{ loadCircuits: () => Promise<CircuitBundle> }> }> = {
-  0: { preset: 'insecure-64', load: () => import('@crisp-e3/sdk/insecure-64') },
-  2: { preset: 'secure-8192', load: () => import('@crisp-e3/sdk/secure-8192') },
+  4: { preset: 'insecure-64', load: () => import('@crisp-e3/sdk/insecure-64') },
+  3: { preset: 'secure-8192', load: () => import('@crisp-e3/sdk/secure-8192') },
 }
 let loading: { preset: CircuitPreset; done: Promise<void> } | undefined
 

@@ -1,7 +1,9 @@
 import type { AztecNode } from '@aztec-labs/stdlib/interfaces/client'
 import type * as SdkModule from '@crisp-e3/aztec'
 import type * as CrispSdkModule from '@crisp-e3/sdk'
-import type { AztecSession, CrispAztec, InputCommitted, MemberRegistered, RoundClosed, RoundOpened, KeyPublished, WithOrigin } from '@crisp-e3/aztec'
+import type * as PassportModule from '@crisp-e3/aztec/passport'
+import type { CrispAztec } from '@crisp-e3/aztec/passport'
+import type { AztecSession, InputCommitted, MemberRegistered, RoundClosed, RoundOpened, KeyPublished, WithOrigin } from '@crisp-e3/aztec'
 import { useQuery } from '@tanstack/react-query'
 import { getAddress, hexToBigInt, isAddress, type Address, type Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
@@ -21,6 +23,10 @@ export type { AztecSession, CrispAztec }
 let sdkPromise: Promise<typeof SdkModule> | undefined
 /** Dynamic on purpose: keeps the Aztec stack out of the initial bundle. */
 export const loadSdk = () => (sdkPromise ??= import('@crisp-e3/aztec'))
+
+let passportPromise: Promise<typeof PassportModule> | undefined
+/** The ZKPassport round client (`CrispAztec`, `nationalityCommitment`): the only entry that loads `@zkpassport/*`. */
+export const loadPassportSdk = () => (passportPromise ??= import('@crisp-e3/aztec/passport'))
 
 let crispSdkPromise: Promise<typeof CrispSdkModule> | undefined
 /** The CRISP SDK (encryption, the base proofs, bb.js), dynamic for the same reason: only the poll page's voting flows need it. */
@@ -266,7 +272,7 @@ let clientPromise: Promise<CrispAztec> | undefined
 /** The `crisp_aztec` contract as a voter's session calls it. */
 export function getClient(): Promise<CrispAztec> {
   clientPromise ??= (async () => {
-    const [{ CrispAztec }, session, { aztecContract }] = await Promise.all([loadSdk(), getSession(), loadDeployment()])
+    const [{ CrispAztec }, session, { aztecContract }] = await Promise.all([loadPassportSdk(), getSession(), loadDeployment()])
     return CrispAztec.connect(session, aztecContract)
   })()
   clientPromise.catch(() => (clientPromise = undefined))
